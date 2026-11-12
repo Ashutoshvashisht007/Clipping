@@ -26,6 +26,7 @@ import math
 import os
 import re
 import shutil
+import signal
 import ssl
 import subprocess
 import sys
@@ -2376,6 +2377,9 @@ def cmd_live(a) -> None:
     def status(**kw):
         report(streamer=name, display=display, **kw)
 
+    # keep the Mac from sleeping while following (the screen may still turn off); stops when this process ends
+    awake = subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL) if shutil.which("caffeinate") else None
     try:
         target, told = None, False
         while target is None:
@@ -2506,6 +2510,8 @@ def cmd_live(a) -> None:
         if sess and md and sess["live"].get("active"):
             sess["live"]["active"] = False
             write_live_session(sess, md)
+        if awake and awake.poll() is None:
+            awake.terminate()
 
 
 def cmd_check(a) -> None:
@@ -2544,7 +2550,15 @@ def cmd_check(a) -> None:
 
 # ───────────────────────────── entry points ─────────────────────────────
 
+def _stop(*_):
+    raise KeyboardInterrupt
+
+
 def main(argv=None) -> int:
+    # Stop / Ctrl+C always stop cleanly (even when started from a shell that ignores Ctrl+C),
+    # and a plain "terminate" does the same tidy-up.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, _stop)
     argv = list(sys.argv[1:] if argv is None else argv)
     ap = argparse.ArgumentParser(prog="clip", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
