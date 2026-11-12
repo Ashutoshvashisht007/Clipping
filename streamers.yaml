@@ -1,0 +1,69 @@
+# Who you clip. makeclip refuses anyone whose permission isn't filled in
+# (use --practice for clips you won't post).
+#
+# permission.source:
+#   whop_campaign     they run a paid clipping campaign on Whop (best: permission + pay)
+#   written           they or their team said yes in a DM or email
+#   public_statement  their bio, panels or Discord says clips are welcome
+#   none              not checked yet
+# permission.proof: a link or screenshot path you could show if anyone asks
+# credit: the handle you tag in captions (check it on YouTube and Instagram)
+# Camera position: set it once with   clip camera <name> <stream link> <time>
+
+streamers:
+  - name: kaicenat
+    display: Kai Cenat
+    channel: https://www.twitch.tv/kaicenat
+    youtube: "@KaiCenatLive"     # his stream uploads on YouTube
+    credit: "@kaicenat"
+    language: en
+    notes: >-
+      Confirmed: streaming GTA 6 until 100% after the 19 Nov launch. Huge clipper
+      competition. Asked fans not to post spoilers, so clip reactions, not story.
+    permission:
+      source: none
+      proof: ""
+      platforms: [youtube_shorts, instagram_reels]
+      monetize: false
+      checked_on: ""
+
+  - name: xqc
+    display: xQc
+    channel: https://www.twitch.tv/xqc
+    credit: "@xqc"
+    language: en
+    notes: Long GTA history; GTA 6 at launch not confirmed. Also streams on kick.com/xqc.
+    permission:
+      source: none
+      proof: ""
+      platforms: [youtube_shorts, instagram_reels]
+      monetize: false
+      checked_on: ""
+
+  - name: summit1g
+    display: summit1g
+    channel: https://www.twitch.tv/summit1g
+    credit: "@summit1g"
+    language: en
+    notes: Long GTA history; GTA 6 at launch not confirmed.
+    permission:
+      source: none
+      proof: ""
+      platforms: [youtube_shorts, instagram_reels]
+      monetize: false
+      checked_on: ""
+
+  # Add more from Whop → Content Rewards → search "GTA". Copy a block above.
+
+  - name: livespeedy
+    display: "ishowspeed"
+    channel: "https://www.twitch.tv/ishowspeed"
+    youtube: "@LiveSpeedy"
+    credit: "@LiveSpeedy"
+    language: en
+    permission:
+      source: none
+      proof: ""
+      platforms: [youtube_shorts, instagram_reels]
+      monetize: false
+      checked_on: ""

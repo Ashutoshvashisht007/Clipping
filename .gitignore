@@ -1,0 +1,29 @@
+# secrets: never commit
+.env
+.env.*
+
+# big or machine-specific
+.venv/
+models/
+tools/
+logs/
+__pycache__/
+
+# your data: videos, downloads, analysis results, logs
+inbox/
+out/
+moments/
+state.json
+log.csv
+ai_state.json
+*.tmp
+
+# pictures the tool makes again by itself
+layouts/*.png
+brand/preview*.png
+brand/sample-frame.png
+brand/_*
+
+# backups and junk
+*.bak
+.DS_Store

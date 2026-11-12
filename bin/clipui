@@ -1,0 +1,4 @@
+#!/bin/sh
+# Starts the Clipping page (http://localhost:8765). Finds its own folder, so the Clipping folder can live anywhere.
+D=$(cd "$(dirname "$0")/.." && pwd)
+exec "$D/.venv/bin/python" -I "$D/bin/clipui.py" "$@"

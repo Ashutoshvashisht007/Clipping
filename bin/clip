@@ -1,0 +1,4 @@
+#!/bin/sh
+# Finds its own folder, so the Clipping folder can live anywhere.
+D=$(cd "$(dirname "$0")/.." && pwd)
+exec "$D/.venv/bin/python" -I "$D/bin/clipkit.py" "$@"

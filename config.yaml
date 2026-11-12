@@ -1,0 +1,29 @@
+# clipkit settings. Change anything here; nothing else needs editing.
+
+rank:                       # the optional AI step in findmoments
+  provider: opencode-go     # opencode-go | openai-compatible | none  (none = rank by chat + volume only)
+  base_url: https://opencode.ai/inference/go/openai/v1
+  model: glm-5.3-flash      # cheapest Go model that needs no privacy-setting change
+  key_from: keychain:opencode-go   # Keychain item name (see README), or env:SOME_VARIABLE
+  max_tokens: 4000
+  price_per_million: {input: 0.15, output: 0.50}   # only used to print what each run cost
+
+captions:
+  model_dir: models/parakeet-tdt-0.6b-v3   # Parakeet v3, runs on your Mac (path inside this folder)
+  font: Arial Black
+  size: 84
+  max_words: 3              # words on screen at once
+  max_chars: 14
+  color: "#FFFFFF"
+  highlight: "#FFE600"      # colour of the word being spoken
+
+clips:
+  cut_silence: true         # remove pauses longer than 0.8 s
+  hashtags: ["#GTA6", "#GTAVI", "#gaming", "#shorts"]   # used when the AI isn't writing them
+  ai_text: true             # the AI writes each clip's YouTube title + description and Instagram caption
+
+findmoments:
+  candidates: 25            # spikes the AI reads (~500 tokens each)
+  top: 10                   # moments written to the moments file
+
+keep_inbox_days: 7          # downloaded pieces in inbox/ are deleted after this many days

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="clip-token" content="__TOKEN__">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Clipping</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23FFE600'/%3E%3Crect x='11' y='6' width='10' height='20' rx='2.5' fill='none' stroke='%23111' stroke-width='2.5'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="mark" aria-hidden="true"></span>Clipping</div>
+  <nav class="tabs" aria-label="Sections">
+    <button class="tab" data-tab="find">Find moments</button>
+    <button class="tab" data-tab="clips">Clips <span class="pill" id="clips-count"></span></button>
+    <button class="tab" data-tab="streamers">Streamers &amp; setup</button>
+  </nav>
+  <div class="top-right">
+    <button id="ai-pill" class="chip chip-btn" data-act="goto-setup"></button>
+    <button id="jobs-btn" class="chip chip-btn" aria-expanded="false">Jobs <span id="jobs-count" class="pill"></span></button>
+  </div>
+</header>
+
+<div id="offline" class="offline" hidden>The Clipping app isn’t running. Double-click <b>Clipping.command</b> in the Clipping folder, then reload this page.</div>
+
+<main>
+  <section id="tab-find" class="tab-page">
+    <form id="find-form" class="find-bar" autocomplete="off">
+      <input id="find-link" type="text" spellcheck="false"
+             placeholder="Paste a Twitch VOD, YouTube video, Kick VOD, or a single clip link" aria-label="Stream or clip link">
+      <button type="submit" class="btn primary">Find moments</button>
+      <button type="button" id="find-opts-btn" class="btn ghost" aria-expanded="false">Options</button>
+    </form>
+    <div id="find-opts" class="find-opts" hidden>
+      <label>Streamer <select id="opt-streamer"><option value="">Work it out from the link</option></select></label>
+      <label>From <input id="opt-from" placeholder="start" size="8"></label>
+      <label>To <input id="opt-to" placeholder="end" size="8"></label>
+      <label class="check"><input type="checkbox" id="opt-full"> Use volume everywhere (slower)</label>
+      <label class="check"><input type="checkbox" id="opt-again"> Analyse again even if done before</label>
+    </div>
+    <div id="find-grid" class="find-grid">
+      <aside class="streams">
+        <div class="side-head">Streams</div>
+        <div id="find-jobs"></div>
+        <div id="streams"></div>
+      </aside>
+      <div id="moments" class="moments"></div>
+      <div id="editor" class="editor"></div>
+    </div>
+  </section>
+  <section id="tab-clips" class="tab-page" hidden></section>
+  <section id="tab-streamers" class="tab-page" hidden></section>
+</main>
+
+<aside id="jobs" class="jobs" hidden aria-label="Jobs"></aside>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<dialog id="cam-dialog" class="cam-dialog"></dialog>
+<dialog id="cap-dialog" class="cap-dialog" aria-label="Edit captions"></dialog>
+<script src="/ui/app.js"></script>
+</body>
+</html>
