@@ -162,7 +162,7 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
 .mom-head a { display: block; margin-top: 2px; font-size: 13px; }
 .mom-meta { color: var(--faint); font-size: 12px; max-width: 420px; text-align: right; }
 .moments > .note { margin-bottom: 10px; }
-.cards { display: grid; gap: 10px; }
+.cards { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); }  /* long chat lines can't widen the cards */
 .mcard {
   border: 1px solid var(--line); background: var(--panel); border-radius: var(--radius); padding: 12px 14px;
   cursor: pointer; transition: border-color .12s, background .12s;
@@ -348,6 +348,13 @@ details.box > .inner { padding: 4px 10px 10px; display: grid; gap: 8px; }
 .cap-in { width: 100%; padding: 5px 8px; text-transform: uppercase; font-weight: 600; letter-spacing: .01em; }
 .cap-in:disabled { opacity: .6; }
 .cap-foot { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+
+/* ── live mode ── */
+.live-dot { width: 9px; height: 9px; border-radius: 50%; background: #ff3b3b; display: inline-block; flex: none; animation: pulse 1.4s infinite; }
+.badge.live { background: rgba(255, 59, 59, .16); color: #ff6b6b; }
+.live-card { border-color: rgba(255, 59, 59, .4); margin-bottom: 14px; }
+.live-note { border-color: rgba(255, 59, 59, .35); background: rgba(255, 59, 59, .06); }
+.live-note .live-dot { margin-right: 6px; vertical-align: 1px; }
 
 /* ── your logo ── */
 .brand-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 18px;

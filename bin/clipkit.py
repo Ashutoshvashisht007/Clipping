@@ -31,6 +31,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import wave
@@ -885,6 +886,43 @@ def fetch_audio(src: dict, work: Path, rng: tuple[float, float] | None) -> Path:
     return finished()[0]
 
 
+def hls_window(inp: dict, a0: float, b0: float, out: Path, threads: int = 12) -> float:
+    """Download only the pieces of an HLS stream (Twitch: 10 s each) that cover a0..b0, several at once.
+    Much faster than reading them one by one. Returns the time in the stream where the file starts."""
+    hdrs = {"User-Agent": "Mozilla/5.0", **(inp.get("headers") or {})}
+
+    def get(url: str) -> bytes:
+        for attempt in range(4):
+            try:
+                with urllib.request.urlopen(urllib.request.Request(url, headers=hdrs), context=SSL_CTX, timeout=30) as r:
+                    return r.read()
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError):
+                time.sleep(1.5 * (attempt + 1))
+        raise ClipError("couldn't download a piece of the stream (check the internet connection)")
+
+    url = inp["url"]
+    text = get(url).decode("utf-8", "replace")
+    if "#EXT-X-STREAM-INF" in text:  # a list of qualities: take the first
+        url = urllib.parse.urljoin(url, next(ln for ln in text.splitlines() if ln and not ln.startswith("#")))
+        text = get(url).decode("utf-8", "replace")
+    segs, t, d = [], 0.0, None
+    for line in text.splitlines():
+        if line.startswith("#EXTINF:"):
+            d = float(line[8:].split(",")[0])
+        elif line and not line.startswith("#") and d is not None:
+            segs.append((t, d, urllib.parse.urljoin(url, line)))
+            t, d = t + d, None
+    pick = [s for s in segs if s[0] + s[1] > a0 and s[0] < b0]
+    if not pick:
+        raise ClipError(f"that part of the stream ({fmt_time(a0)}–{fmt_time(b0)}) isn't there yet")
+    with cf.ThreadPoolExecutor(threads) as ex:
+        data = list(ex.map(lambda s: get(s[2]), pick))
+    with out.open("wb") as f:
+        for chunk in data:
+            f.write(chunk)
+    return pick[0][0]
+
+
 def resolve_streamer_name(explicit: str | None, info: dict) -> str:
     if explicit:
         return explicit.lower()
@@ -902,8 +940,11 @@ def cmd_findmoments(a) -> None:
     src = source_of(a.link)
     if src["kind"] in ("twitch-clip", "kick-clip"):
         raise ClipError("That's a single clip, not a full stream. Turn it into a vertical clip with makeclip.")
+    if a.live and src["kind"] not in ("twitch", "file"):
+        raise ClipError("Live mode reads Twitch streams directly; YouTube and Kick streams are recorded first "
+                        "(clip live <streamer> does that).")
     st = load_state()
-    if src["key"] in st["streams"] and not a.again:
+    if src["key"] in st["streams"] and not a.again and not a.live:
         prev = st["streams"][src["key"]]
         say(f"Already analysed on {prev['date']}: {prev['moments_file']}\n  (add --again to analyse it again)")
         report(key=src["key"], already=True)
@@ -913,8 +954,9 @@ def cmd_findmoments(a) -> None:
 
     step("Looking up the stream...")
     info = probe(src, "ba/worst")
-    if info.get("is_live") or info.get("live_status") == "is_live":
-        raise ClipError("This stream is still live. Wait for the VOD, or record it with: clip record <streamer>")
+    if (info.get("is_live") or info.get("live_status") == "is_live") and not a.live:
+        raise ClipError("This stream is still live. Follow it with Live mode (clip live <streamer>, or "
+                        "'Follow live' on the Clipping page), or wait for it to end.")
     duration = float(info.get("duration") or 0)
     a0 = parse_time(a.from_) if a.from_ else 0.0
     b0 = min(parse_time(a.to), duration) if a.to else duration
@@ -941,7 +983,8 @@ def cmd_findmoments(a) -> None:
     if rate is not None:
         z = robust_z(np.log1p(rate))
         chat_z = np.array([z[k: k + 3].max() for k in range(nwin)])  # chat reacts 0-30 s after the moment
-    quick = chat is not None and not a.full_audio
+    # live: the part is short and its audio quick to fetch, so measure the volume of all of it
+    quick = chat is not None and not a.full_audio and not a.live
     audio_in = info["_input"][0]
     src_offset = 0.0  # sections are cut from a source whose time 0 is the stream's start
     local_audio = None
@@ -952,8 +995,18 @@ def cmd_findmoments(a) -> None:
         audio_in = {"url": str(local_audio), "headers": None}
 
     loud = loud_z = None
+    window = None  # live: this part's audio, deleted once the moments are cut from it
     if not quick:
-        if src["kind"] == "file":
+        if a.live and src["kind"] == "twitch":
+            step(f"Downloading the audio of {fmt_time(a0)}–{fmt_time(b0)}...")
+            window = work / f"window-{int(a0)}-{int(b0)}.ts"
+            audio_path, offset = window, hls_window(info["_input"][0], a0, b0, window)
+        elif a.live and src["kind"] == "file":  # a recording that's still growing: read only this part
+            window = work / f"window-{int(a0)}-{int(b0)}.wav"
+            run([FFMPEG, "-v", "error", "-y", "-ss", f"{a0:.2f}", "-t", f"{b0 - a0:.2f}", "-i", src["path"],
+                 "-vn", "-ac", "1", "-ar", "16000", window])
+            audio_path, offset = window, a0
+        elif src["kind"] == "file":
             audio_path, offset = Path(src["path"]), 0.0
         elif local_audio is not None:
             audio_path, offset = local_audio, 0.0
@@ -1000,6 +1053,8 @@ def cmd_findmoments(a) -> None:
 
     step(f"Grabbing audio around {len(cands)} spikes...")
     section_wavs(audio_in, cands, work, threads=4 if quick else 6)
+    if window is not None:
+        window.unlink(missing_ok=True)
 
     if quick:  # measure volume inside each section now that we have it
         for c in cands:
@@ -1112,7 +1167,6 @@ def cmd_findmoments(a) -> None:
             lines += [""] + [f"> {x}  " for x in said]
         hook = f' --hook "{m["hook"]}"' if m["hook"] else ""
         lines += ["", "```", f'makeclip "{src["url"]}" {fmt_time(m["start"])} {fmt_time(m["end"])} {streamer}{hook}', "```", ""]
-    out.write_text("\n".join(lines))
     # the same moments as data, for the Clipping page
     data = {"version": 1, "key": src["key"], "kind": src["kind"], "id": src.get("id", ""), "url": src["url"],
             "streamer": streamer, "display": meta["streamer"], "title": info.get("title", ""), "day": day,
@@ -1124,6 +1178,11 @@ def cmd_findmoments(a) -> None:
                          "chat": c["chat_samples"], "said": [[t, txt] for t, txt in c["sentences"]],
                          "link": link_at(src, m["start"])}
                         for i, m in enumerate(moments, 1) for c in [m["cand"]]]}
+    if a.out:  # one part of a live stream: Live mode merges it into the stream's moments
+        Path(a.out).write_text(json.dumps(data, indent=1, ensure_ascii=False, default=float))
+        say(f"✓ {len(moments)} moments in {fmt_time(a0)}–{fmt_time(b0)}. {usage_line}")
+        return
+    out.write_text("\n".join(lines))
     out.with_suffix(".json").write_text(json.dumps(data, indent=1, ensure_ascii=False, default=float))
 
     st["streams"][src["key"]] = {
@@ -1549,12 +1608,30 @@ def grab_section(src: dict, start: float, end: float, out: Path) -> dict:
     if not inputs:
         raise ClipError("Couldn't get a video link for that stream.")
     cmd = [FFMPEG, "-v", "error", "-y"]
-    for inp in inputs:
-        cmd += ff_input(inp, start, end - start)
+    parts: list[Path] = []
+    if src["kind"] == "twitch":  # fetch just the needed pieces at once (also works while the stream is live)
+        try:
+            for i, inp in enumerate(inputs):
+                part = out.parent / f"piece-{i}.ts"
+                t0 = hls_window(inp, start - 1, end + 1, part)
+                parts.append(part)
+                cmd += ["-ss", f"{max(0.0, start - t0):.3f}", "-t", f"{end - start:.3f}", "-i", str(part)]
+        except ClipError as e:
+            warn(f"fast download didn't work ({e}); reading the stream directly")
+            for p in parts:
+                p.unlink(missing_ok=True)
+            cmd, parts = [FFMPEG, "-v", "error", "-y"], []
+    if not parts:
+        for inp in inputs:
+            cmd += ff_input(inp, start, end - start)
     cmd += ["-map", "0:v:0", "-map", "1:a:0" if len(inputs) > 1 else "0:a:0",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "256k", "-ar", "48000", str(out)]
-    run(cmd)
+    try:
+        run(cmd)
+    finally:
+        for p in parts:
+            p.unlink(missing_ok=True)
     return info
 
 
@@ -2204,6 +2281,233 @@ def cmd_record(a) -> None:
     subprocess.run([*STREAMLINK, "-o", str(out), ch, "best"])
 
 
+# ───────────────────────────── live mode ─────────────────────────────
+
+def twitch_gql(query: str) -> dict:
+    req = urllib.request.Request("https://gql.twitch.tv/gql", data=json.dumps({"query": query}).encode(), headers={
+        "Client-Id": TWITCH_CLIENT_ID, "Content-Type": "application/json", "User-Agent": "clipkit/1.0"})
+    with urllib.request.urlopen(req, context=SSL_CTX, timeout=20) as r:
+        return json.load(r)
+
+
+def handle_of(v: str) -> str:
+    return re.sub(r"[^\w-]", "", str(v).rstrip("/").split("/")[-1].lstrip("@"))
+
+
+def live_places(s_conf: dict) -> list[tuple[str, str]]:
+    """Where this streamer might be live: (platform, link), main channel first."""
+    out: list[tuple[str, str]] = []
+    ch = str(s_conf.get("channel") or "")
+    for host, plat in (("twitch.tv/", "twitch"), ("kick.com/", "kick"), ("youtube.com/", "youtube")):
+        if host in ch:
+            out.append((plat, ch if plat != "youtube" else f"https://www.youtube.com/@{handle_of(ch)}/live"))
+    if s_conf.get("twitch"):
+        out.append(("twitch", f"https://www.twitch.tv/{handle_of(s_conf['twitch'])}"))
+    if s_conf.get("kick"):
+        out.append(("kick", f"https://kick.com/{handle_of(s_conf['kick'])}"))
+    if s_conf.get("youtube"):
+        out.append(("youtube", f"https://www.youtube.com/@{handle_of(s_conf['youtube'])}/live"))
+    seen, uniq = set(), []
+    for p in out:
+        if p[1].lower() not in seen:
+            seen.add(p[1].lower())
+            uniq.append(p)
+    return uniq
+
+
+def find_live(s_conf: dict) -> dict | None:
+    """Is the streamer live anywhere? Twitch answers fast; YouTube and Kick are asked through streamlink."""
+    for plat, url in live_places(s_conf):
+        try:
+            if plat == "twitch":
+                d = twitch_gql(f'{{ user(login: "{handle_of(url).lower()}") {{ broadcastSettings {{ title }} '
+                               f'stream {{ id createdAt archiveVideo {{ id status }} }} }} }}')
+                u = (d.get("data") or {}).get("user") or {}
+                s = u.get("stream")
+                if s:
+                    v = s.get("archiveVideo") or {}
+                    return {"platform": plat, "url": url, "vod": v.get("id"),
+                            "title": (u.get("broadcastSettings") or {}).get("title", "")}
+            else:
+                res = subprocess.run([*STREAMLINK, "--json", url], capture_output=True, text=True, timeout=90)
+                d = json.loads(res.stdout or "{}")
+                if d.get("streams"):
+                    return {"platform": plat, "url": url, "vod": None, "title": (d.get("metadata") or {}).get("title", "")}
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, subprocess.TimeoutExpired):
+            continue
+    return None
+
+
+def notify(msg: str) -> None:
+    """A Mac notification (passed as an argument, so any text is safe)."""
+    subprocess.run(["osascript", "-e", "on run argv", "-e", 'display notification (item 1 of argv) with title "Clipping"',
+                    "-e", "end run", msg], capture_output=True)
+
+
+def write_live_session(sess: dict, md: Path) -> None:
+    md.parent.mkdir(parents=True, exist_ok=True)
+    md.with_suffix(".json").write_text(json.dumps(sess, indent=1, ensure_ascii=False, default=float))
+    lines = [f"# Live moments: {sess['display']}", "", f"**Stream:** {sess.get('title', '')}  ", f"**Link:** {sess['url']}  ",
+             f"**{sess.get('ranking', '')}**", "", "Newest first. Open them on the Clipping page, or copy a makeclip line.", ""]
+    for m in sess["moments"]:
+        lines += [f"## {m['n']}. {m['title']}" + (f"  ·  {m['score']}/10" if m.get("score") else ""),
+                  m.get("why") or "", f"- **Clip:** {fmt_time(m['start'])} → {fmt_time(m['end'])}",
+                  "", "```", f'makeclip "{sess["url"]}" {fmt_time(m["start"])} {fmt_time(m["end"])} {sess["streamer"]}', "```", ""]
+    md.write_text("\n".join(lines))
+    st = load_state()
+    st["streams"][sess["key"]] = {
+        "date": sess["day"], "streamer": sess["streamer"], "title": sess.get("title", ""), "url": sess["url"],
+        "range": sess.get("range"), "moments_file": str(md), "live": bool(sess["live"]["active"]),
+        "moments": [{"start": m["start"], "end": m["end"], "title": m["title"], "hook": m.get("hook", "")} for m in sess["moments"]]}
+    save_state(st)
+
+
+def cmd_live(a) -> None:
+    """Follow a live stream: check its newest part every few minutes and collect the moments."""
+    s_conf = get_streamer(a.streamer)
+    name, display = str(s_conf["name"]).lower(), s_conf.get("display", s_conf["name"])
+    every, back, top = max(5.0, float(a.every)) * 60, max(5.0, float(a.back)) * 60, max(1, int(a.top))
+    rec = rec_file = None
+    sess = md = None
+    env = {k: v for k, v in os.environ.items() if k != "CLIPKIT_RESULT"}  # the checks mustn't overwrite our report
+    if not live_places(s_conf):
+        raise ClipError(f"{display} has no Twitch, Kick or YouTube channel in streamers.yaml.")
+
+    def status(**kw):
+        report(streamer=name, display=display, **kw)
+
+    try:
+        target, told = None, False
+        while target is None:
+            target = find_live(s_conf)
+            if target is None:
+                if not told:
+                    step(f"{display} isn't live right now. Checking every 2 minutes; leave this running.")
+                    status(state="waiting")
+                    told = True
+                time.sleep(120)
+        day = dt.date.today().isoformat()
+        if target["platform"] == "twitch" and target.get("vod"):
+            mode, link = "twitch", f"https://www.twitch.tv/videos/{target['vod']}"
+            key = f"twitch-{target['vod']}"
+            step(f"{display} is live on Twitch: {target.get('title', '')[:80]}")
+            say("    Reading the stream's replay as it grows, chat included.")
+        else:
+            mode = "record"
+            live_dir = ROOT / "inbox" / "live"
+            live_dir.mkdir(parents=True, exist_ok=True)
+            rec_file = live_dir / f"{name}-{dt.datetime.now():%Y%m%d-%H%M}.ts"
+            link, key = str(rec_file), f"file-{slug(rec_file.stem)}"
+            step(f"{display} is live on {target['platform'].title()}: {target.get('title', '')[:70]}")
+            say(f"    Recording it to inbox/live/{rec_file.name} (720p). There's no chat replay there, so moments "
+                "come from volume and speech.")
+            rec = subprocess.Popen([*STREAMLINK, "--loglevel", "error", "-o", str(rec_file), target["url"],
+                                    "720p60,720p,best"], stdin=subprocess.DEVNULL)
+        md = ROOT / "moments" / name / f"{day}-live-{key}.md"
+        old = json.loads(md.with_suffix(".json").read_text()) if md.with_suffix(".json").exists() else None
+        sess = old or {"version": 1, "key": key, "kind": "twitch" if mode == "twitch" else "file",
+                       "id": target.get("vod") or "", "url": link, "streamer": name, "display": display,
+                       "title": target.get("title", ""), "day": day, "range": None, "ranking": "", "ai": False,
+                       "chat": mode == "twitch", "moments": []}
+        sess["live"] = {"active": True, "mode": mode, "platform": target["platform"], "started": time.time(),
+                        "last_check": None, "next_check": time.time(), "checks": (old or {}).get("live", {}).get("checks", 0)}
+        last_b = ((old or {}).get("range") or [None, None])[1]  # carry on where an earlier follow stopped
+        write_live_session(sess, md)
+        status(state="following", key=key, mode=mode, moments=len(sess["moments"]))
+
+        ended = False
+        while True:
+            t_cycle = time.time()
+            if mode == "twitch":
+                info = probe(source_of(link))
+                length = float(info.get("duration") or 0)
+                ended = not (info.get("is_live") or info.get("live_status") == "is_live")
+                b = length - (5 if ended else 45)  # stay a little behind live: the newest pieces are still arriving
+            else:
+                ended = rec.poll() is not None
+                try:
+                    length = float(run([FFPROBE, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                                        rec_file]).strip() or 0) if rec_file.exists() else 0.0
+                except (ClipError, ValueError):
+                    length = 0.0
+                b = length - 10
+            a0 = max(0.0, (b - back) if last_b is None else last_b - 90)  # overlap a little: no moment falls between
+            if b - a0 < 150 and not ended:
+                time.sleep(30)  # not enough new stream yet (e.g. a recording that just started)
+                continue
+            if b - a0 >= 150:
+                stamp = dt.datetime.now().strftime("%H:%M")
+                step(f"[{stamp}] Checking {fmt_time(a0)}–{fmt_time(b)} of the stream...")
+                chunk = ROOT / "inbox" / key / "live-chunk.json"
+                chunk.parent.mkdir(parents=True, exist_ok=True)
+                chunk.unlink(missing_ok=True)
+                res = subprocess.run([sys.executable, "-I", str(Path(__file__).resolve()), "findmoments", link, "--live",
+                                      "--from", str(int(a0)), "--to", str(int(b)), "--streamer", name,
+                                      "--top", str(top), "--out", str(chunk)], env=env, stdin=subprocess.DEVNULL)
+                sess["live"]["checks"] += 1
+                if res.returncode == 0 and chunk.exists():
+                    part = json.loads(chunk.read_text())
+                    fresh = []
+                    next_n = max([m["n"] for m in sess["moments"]] + [0]) + 1
+                    for m in part["moments"]:
+                        if any(min(m["end"], x["end"]) - max(m["start"], x["start"]) > 0.5 * (m["end"] - m["start"])
+                               for x in sess["moments"]):
+                            continue  # found already in the last check
+                        m = {**m, "n": next_n, "found_at": time.time()}
+                        next_n += 1
+                        if mode == "record":  # a small preview to watch it on the page
+                            pv = ROOT / "inbox" / "live" / "previews" / f"{key}-{int(m['seg_start'])}.mp4"
+                            pv.parent.mkdir(parents=True, exist_ok=True)
+                            try:
+                                run([FFMPEG, "-v", "error", "-y", "-ss", f"{m['seg_start']:.2f}",
+                                     "-t", f"{m['seg_end'] - m['seg_start']:.2f}", "-i", rec_file, "-vf", "scale=-2:540",
+                                     "-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-c:a", "aac", "-b:a", "96k",
+                                     "-movflags", "+faststart", pv])
+                                m["preview"], m["preview_from"] = str(pv.relative_to(ROOT)), m["seg_start"]
+                            except ClipError:
+                                pass
+                        fresh.append(m)
+                    fresh.sort(key=lambda m: -(m.get("score") or 0))  # best first, for the notification
+                    sess["moments"] = sorted(fresh, key=lambda m: -m["start"]) + sess["moments"]  # newest first
+                    sess["range"] = [sess["range"][0] if sess.get("range") else a0, b]
+                    sess.update(ranking=part.get("ranking", ""), ai=part.get("ai", False),
+                                title=part.get("title") or sess.get("title", ""))
+                    last_b = b
+                    if fresh:
+                        say(f"✓ {len(fresh)} new moment(s): " + "; ".join(m["title"][:50] for m in fresh[:3]))
+                        notify(f"{len(fresh)} new moment{'s' if len(fresh) > 1 else ''} from {display}: {fresh[0]['title'][:70]}")
+                    else:
+                        say("    nothing new stood out in this part")
+                else:
+                    warn("This check didn't work; trying again at the next one.")
+            sess["live"].update(last_check=time.time(), next_check=None if ended else t_cycle + every)
+            if ended:
+                sess["live"]["active"] = False
+                write_live_session(sess, md)
+                say(f"✓ {display}'s stream ended. {len(sess['moments'])} moments in all.")
+                status(state="ended", key=key, mode=mode, moments=len(sess["moments"]))
+                notify(f"{display}'s stream ended: {len(sess['moments'])} moments to look at")
+                return
+            write_live_session(sess, md)
+            status(state="following", key=key, mode=mode, moments=len(sess["moments"]),
+                   last_check=sess["live"]["last_check"], next_check=sess["live"]["next_check"])
+            say(f"    next check at {dt.datetime.fromtimestamp(t_cycle + every):%H:%M}")
+            while time.time() < t_cycle + every:
+                if mode == "record" and rec.poll() is not None:
+                    break  # the stream ended: check the last part now
+                time.sleep(3)
+    finally:
+        if rec and rec.poll() is None:
+            rec.terminate()
+            try:
+                rec.wait(10)
+            except subprocess.TimeoutExpired:
+                rec.kill()
+        if sess and md and sess["live"].get("active"):
+            sess["live"]["active"] = False
+            write_live_session(sess, md)
+
+
 def cmd_check(a) -> None:
     cfg = load_config()
 
@@ -2254,6 +2558,14 @@ def main(argv=None) -> int:
     f.add_argument("--candidates", type=int)
     f.add_argument("--full-audio", action="store_true", help="download the whole audio and use volume spikes everywhere")
     f.add_argument("--again", action="store_true")
+    f.add_argument("--live", action="store_true", help="the stream is still live (used by live mode)")
+    f.add_argument("--out", help="write the moments to this JSON file only (used by live mode)")
+
+    lv = sub.add_parser("live", help="follow a live stream and collect its moments as they happen")
+    lv.add_argument("streamer")
+    lv.add_argument("--every", type=float, default=20, help="minutes between checks (default 20)")
+    lv.add_argument("--back", type=float, default=30, help="minutes of the stream to check the first time (default 30)")
+    lv.add_argument("--top", type=int, default=4, help="most moments to keep from each check (default 4)")
 
     m = sub.add_parser("makeclip", help="make a captioned vertical clip")
     m.add_argument("rest", nargs="+", metavar="ARGS", help="<link or file> [start end] <streamer>")
@@ -2299,6 +2611,7 @@ def main(argv=None) -> int:
     try:
         {"findmoments": cmd_findmoments, "makeclip": cmd_makeclip, "camera": cmd_camera, "frame": cmd_frame,
          "captions": cmd_captions, "recaption": cmd_recaption, "posttext": cmd_posttext, "brand": cmd_brand,
+         "live": cmd_live,
          "record": cmd_record, "check": cmd_check}[a.cmd](a)
     except ClipError as e:
         say(f"✗ {e}")

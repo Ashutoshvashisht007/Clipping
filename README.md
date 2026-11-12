@@ -19,6 +19,11 @@ your browser at http://localhost:8765. Keep that Terminal window open while you 
 - **The AI pauses itself** when it's unreachable, refuses the key or the usage limit is reached: until it's back,
   moments are ranked by chat and volume, and clips get the plain title and hashtags. It tries again by itself (after
   5 minutes, or 1 hour for the limit, then longer); "Try AI now" in Streamers & setup tries straight away.
+- **Live mode:** Streamers & setup → **Follow live** on a streamer (Terminal: `clip live <streamer>`). If they're
+  offline it waits; once they're live it checks the newest part every 20 minutes and adds the moments to the top of
+  that stream's list, with a Mac notification. Twitch is read straight from the stream's replay, chat included.
+  YouTube and Kick are recorded to `inbox/live/` (about 350 MB an hour, deleted after 7 days) and checked from the
+  recording, without chat. Make clips from live moments as usual, while the stream is still going.
 - **Your logo:** every new clip gets your logo (`brand/`), cut out of its background automatically.
   Streamers & setup → "Your logo on every clip" sets where it goes and how big, changes the logo, and updates
   existing clips to match (Terminal: `clip brand logo <picture>`, `clip brand apply`). Clips the logo was added to

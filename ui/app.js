@@ -64,7 +64,7 @@ const POST_NAMES = { title: 'YouTube title', yt: 'YouTube description', ig: 'Ins
 const S = {
   tab: 'find', status: null, streamers: [], streams: [], stream: null, editor: null,
   clips: [], clipFilter: 'all', dirtyClips: new Set(), jobs: [], jobsOpen: false, openJobs: new Set(),
-  findJob: null, jobInfo: {}, dismissed: new Set(), addPrefill: null, flash: null, aiJobs: {},
+  findJob: null, jobInfo: {}, dismissed: new Set(), addPrefill: null, flash: null, aiJobs: {}, liveSeen: {},
 };
 let player = null;
 let CAM = null;
@@ -109,7 +109,7 @@ function showTab(name, push = true) {
   $$('.tab-page').forEach((p) => { p.hidden = p.id !== `tab-${name}`; });
   if (push && location.hash !== `#${name}`) history.replaceState(null, '', `#${name}`);
   if (name !== 'find' && player) player.pause();
-  if (name === 'find') { renderStreams(); renderMoments(); renderFindJobs(); }
+  if (name === 'find') { renderStreams(); renderMoments(); renderFindJobs(); renderLiveJobs(); }
   if (name === 'clips') { renderClips(); loadClips(); }
   if (name === 'streamers') renderStreamers();
 }
@@ -215,6 +215,7 @@ const ACTS = {
     try { upsertJob(await api('/api/record', { name: el.dataset.name })); renderStreamers(); pollSoon(); toast('Recording. Press Stop when you have enough.'); } catch (e) { toast(e.message, 'bad', 7000); }
   },
   'find-file': (el) => startFind(el.dataset.file, { streamer: el.dataset.name, again: true }),
+  'live-follow': (el) => followLive(el.dataset.name),
   'close-jobs': () => { S.jobsOpen = false; renderJobs(); },
 };
 
@@ -316,7 +317,7 @@ function renderStreams() {
   if (!S.streams.length) { el.innerHTML = '<p class="empty small">Nothing analysed yet. Paste a stream link above.</p>'; return; }
   el.innerHTML = S.streams.map((s) => `
     <button class="stream ${S.stream && S.stream.key === s.key ? 'active' : ''}" data-act="open-stream" data-key="${esc(s.key)}">
-      <span class="stream-who">${esc(displayOf(s.streamer))}</span>
+      <span class="stream-who">${esc(displayOf(s.streamer))}${s.live ? ' <span class="badge live">LIVE</span>' : ''}</span>
       <span class="stream-title">${esc(s.title || s.url)}</span>
       <span class="stream-meta">${esc(s.date)} · ${s.count} moments</span>
     </button>`).join('');
@@ -359,6 +360,13 @@ function renderMoments() {
     notes += `<div class="note">This stream was analysed before the page existed, so transcripts and chat aren’t shown.
       <button class="link" data-act="reanalyse" data-url="${esc(st.url)}">Analyse it again</button> (about 2 minutes, reuses the download) to get them.</div>`;
   }
+  if (st.live) {
+    const lv = st.live;
+    notes = (lv.active
+      ? `<div class="note live-note"><span class="live-dot"></span><b>Following live.</b> New moments are added at the top
+          ${lv.next_check ? `(next check ${hhmm(lv.next_check)})` : ''}. ${lv.mode === 'record' ? 'This stream is being recorded, so there’s no chat; watch the previews here.' : ''}</div>`
+      : `<div class="note">Followed live${lv.last_check ? ` until ${hhmm(lv.last_check)}` : ''}. To get the whole stream’s best moments too, use Find moments on it once it has ended.</div>`) + notes;
+  }
   el.innerHTML = `
     <div class="mom-head"><div><h2>${esc(sm ? sm.display : st.display || st.streamer)}</h2>
       <a href="${esc(st.url)}" target="_blank" rel="noopener">${esc(st.title || st.url)}</a></div>
@@ -376,6 +384,7 @@ function momentCard(st, m) {
   const j = makeJobFor(`${st.key}#${m.n}`);
   const badges = [];
   if (m.score) badges.push(`<span class="score">${esc(m.score)}/10</span>`);
+  if (m.found_at && Date.now() / 1000 - m.found_at < 30 * 60) badges.push('<span class="badge live">NEW</span>');
   if (m.spoiler) badges.push('<span class="badge bad">Possible spoiler</span>');
   if (j && ACTIVE.has(j.status)) badges.push('<span class="badge busy">Making…</span>');
   else if (m.made && m.made.length) badges.push(`<span class="badge good">${m.made.every((x) => x.practice) ? 'Practice made' : 'Clip made'}</span>`);
@@ -407,7 +416,8 @@ function openMoment(n) {
   const ref = `${st.key}#${n}`;
   const j = makeJobFor(ref);
   S.editor = {
-    mode: 'moment', key: st.key, n, ref, src: { kind: st.kind, id: st.id, url: st.url }, link: st.url,
+    mode: 'moment', key: st.key, n, ref, link: st.url,
+    src: { kind: st.kind, id: st.id, url: st.url, preview: m.preview ? `/files/${m.preview}` : null, from: m.preview_from || 0 },
     // without AI ranking, a moment's "title" is just its first spoken line: leave the title to the AI instead
     start: m.start, end: m.end, hook: m.hook || '', title: st.ai ? (m.title || '') : '', keepSilence: false, practice: false,
     said: m.said || [], spoiler: !!m.spoiler, jobId: j ? j.id : null, heading: m.title || `Moment at ${fmt(m.start)}`,
@@ -655,6 +665,13 @@ class Player {
         video: this.src.id, parent: [location.hostname], time: twitchT(start), autoplay: false, width: '100%', height: '100%',
       });
       this.kind = 'tw';
+    } else if (k === 'file' && this.src.preview) {  // a moment from a live recording: its small preview
+      const v = document.createElement('video');
+      Object.assign(v, { src: this.src.preview, controls: true, playsInline: true, preload: 'metadata' });
+      v.style.cssText = 'width:100%;height:100%;background:#000;display:block';
+      this.host.replaceChildren(v);
+      this.p = v; this.off = this.src.from || 0; this.kind = 'local';
+      v.addEventListener('loadedmetadata', () => { v.currentTime = Math.max(0, start - this.off); }, { once: true });
     } else if (k === 'twitch-clip') {
       div.innerHTML = `<iframe src="https://clips.twitch.tv/embed?clip=${encodeURIComponent(this.src.id)}&parent=${encodeURIComponent(location.hostname)}&autoplay=false" allowfullscreen></iframe>`;
       this.kind = 'iframe';
@@ -675,12 +692,23 @@ class Player {
     try {
       if (this.kind === 'yt' && this.p.getCurrentTime) return this.p.getCurrentTime();
       if (this.kind === 'tw') return this.p.getCurrentTime();
+      if (this.kind === 'local') return this.off + this.p.currentTime;
     } catch { /* not ready */ }
     return null;
   }
-  seek(t) { try { if (this.kind === 'yt') this.p.seekTo(t, true); else if (this.kind === 'tw') this.p.seek(t); } catch { /* not ready */ } }
-  play() { try { if (this.kind === 'yt') this.p.playVideo(); else if (this.kind === 'tw') this.p.play(); } catch { /* not ready */ } }
-  pause() { try { if (this.kind === 'yt') this.p.pauseVideo(); else if (this.kind === 'tw') this.p.pause(); } catch { /* not ready */ } }
+  seek(t) {
+    try {
+      if (this.kind === 'yt') this.p.seekTo(t, true);
+      else if (this.kind === 'tw') this.p.seek(t);
+      else if (this.kind === 'local') {
+        const d = this.p.duration || 0;
+        if (t < this.off || (d && t > this.off + d)) toast('The preview only covers the minute or two around this moment.', 'info', 3000);
+        this.p.currentTime = Math.min(Math.max(0, t - this.off), d || 1e9);
+      }
+    } catch { /* not ready */ }
+  }
+  play() { try { if (this.kind === 'yt') this.p.playVideo(); else if (this.kind === 'tw') this.p.play(); else if (this.kind === 'local') this.p.play(); } catch { /* not ready */ } }
+  pause() { try { if (this.kind === 'yt') this.p.pauseVideo(); else if (this.kind === 'tw') this.p.pause(); else if (this.kind === 'local') this.p.pause(); } catch { /* not ready */ } }
   playRange(a, b) {
     if (!this.kind || this.kind === 'iframe') { toast('This player can’t jump to a time. Use the link to watch it.', 'info'); return; }
     this.seek(a); this.play();
@@ -889,6 +917,11 @@ function streamerCard(s) {
       </form>
     </div>
     <div class="scard-foot"><span class="muted small">Credit: ${esc(s.credit)}</span><span class="spacer"></span>
+      ${(() => {
+        const lv = S.jobs.find((j) => j.kind === 'live' && j.meta.streamer === s.name && ACTIVE.has(j.status));
+        return lv ? `<span class="rec-on small">Following live</span><button class="btn small" data-act="stop-job" data-id="${lv.id}">Stop</button>`
+          : `<button class="btn small primary" data-act="live-follow" data-name="${esc(s.name)}" title="Checks their live stream every 20 minutes and collects the moments (waits if they're offline)">Follow live</button>`;
+      })()}
       ${recording ? `<span class="rec-on small">Recording</span><button class="btn small" data-act="stop-job" data-id="${rec.id}">Stop</button>`
         : `<button class="btn small ghost" data-act="record" data-name="${esc(s.name)}" title="Records their live stream to inbox/live (volume only, no chat)">Record live</button>`}
       ${recFile ? `<button class="btn small" data-act="find-file" data-file="${esc(recFile)}" data-name="${esc(s.name)}">Find moments in the recording</button>` : ''}</div>
@@ -1303,6 +1336,15 @@ function onJobEnd(j) {
     loadClips(); refreshStream();
   }
   if (['find', 'make', 'posttext'].includes(j.kind)) loadStatus();  // the AI may have paused or come back
+  if (j.kind === 'live') {
+    const r = j.result || {}; const who = r.display || displayOf(j.meta.streamer);
+    if (r.state === 'ended') toast(`${who}’s stream ended: ${r.moments || 0} moments to look at.`, 'good', 8000);
+    else if (j.status === 'stopped') toast(`Stopped following ${who}.`, 'info', 4000);
+    else if (j.status === 'failed') toast(`Following ${who} stopped: ${j.error}`, 'bad', 8000);
+    loadStreams(); if (S.stream && S.stream.key === r.key) refreshStream();
+    if (S.tab === 'streamers') renderStreamers();
+    if (S.tab === 'find') renderLiveJobs();
+  }
   if (j.kind === 'brand') {
     loadBrand(); loadClips();
     const r = j.result || {};
@@ -1312,9 +1354,59 @@ function onJobEnd(j) {
   if (j.kind === 'make' || j.kind === 'recaption') S.brand = null;  // clip counts changed
 }
 
+// ── live mode ──
+function liveJobs() { return S.jobs.filter((j) => j.kind === 'live' && ACTIVE.has(j.status)); }
+const hhmm = (t) => (t ? new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '');
+
+function renderLiveJobs() {
+  const el = $('#live-jobs'); if (!el) return;
+  const jobs = liveJobs();
+  if (!changed(el, jobs.map((j) => `${jobSig(j)}|${JSON.stringify(j.result || {})}`).join('|'))) return;
+  el.innerHTML = jobs.map((j) => {
+    const r = j.result || {}; const who = r.display || displayOf(j.meta.streamer);
+    const last = j.lines.length ? j.lines[j.lines.length - 1] : 'Starting…';
+    let body;
+    if (r.state === 'waiting' || !r.key) {
+      body = `<p>${r.state === 'waiting' ? `Waiting for ${esc(who)} to go live. Checking every 2 minutes.` : esc(last)}</p>`;
+    } else {
+      const busy = /Checking|Downloading|Reading chat|Transcribing|Ranking|Grabbing|Measuring/.test(last);
+      body = `<p><b>${r.moments || 0}</b> moment${r.moments === 1 ? '' : 's'} so far${r.mode === 'record' ? ' · recording (no chat)' : ''}<br>
+        <span class="faint">${busy ? 'Checking the newest part now…' : r.last_check ? `Checked ${hhmm(r.last_check)}, next ${hhmm(r.next_check)}` : esc(last)}</span></p>`;
+    }
+    return `<div class="job-card live-card"><div class="row"><span class="live-dot"></span><b>Live · ${esc(who)}</b></div>${body}
+      <div class="row">${r.key ? `<button class="btn small" data-act="open-stream" data-key="${esc(r.key)}">Open moments</button>` : ''}
+        <span class="spacer"></span><button class="btn small ghost" data-act="stop-job" data-id="${j.id}">Stop</button></div></div>`;
+  }).join('');
+}
+
+// tell the page about new live moments as they arrive
+function watchLive() {
+  for (const j of liveJobs()) {
+    const r = j.result || {}; if (!r.key) continue;
+    const seen = S.liveSeen[j.id];
+    if (seen !== undefined && r.moments > seen) {
+      const n = r.moments - seen;
+      toast(`${n} new moment${n > 1 ? 's' : ''} from ${r.display || j.meta.streamer}`, 'good', 6000);
+      if (S.stream && S.stream.key === r.key) refreshStream();
+      loadStreams();
+    }
+    S.liveSeen[j.id] = r.moments || 0;
+  }
+}
+
+async function followLive(name) {
+  try {
+    const job = await api('/api/live', { name });
+    upsertJob(job); pollSoon();
+    toast(`Following ${displayOf(name)}. The newest part is checked every ${job.meta.every || 20} minutes; you’ll get a notification for new moments.`, 'info', 7000);
+    if (S.tab === 'streamers') renderStreamers();
+  } catch (e) { toast(e.message, 'bad', 7000); }
+}
+
 function renderAllJobs() {
   renderJobs();
-  if (S.tab === 'find') renderFindJobs();
+  watchLive();
+  if (S.tab === 'find') { renderFindJobs(); renderLiveJobs(); }
   renderEditorJob();
   renderCapJob();
   renderBrandApply();

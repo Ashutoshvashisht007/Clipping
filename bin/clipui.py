@@ -41,7 +41,7 @@ TOKEN = secrets.token_urlsafe(24)
 PORT = 8765
 JOB_DIR = ROOT / "inbox" / "ui-jobs"
 FRAME_DIR = ROOT / "inbox" / "ui-frames"
-SERVE_DIRS = ("out", "layouts", "inbox/ui-frames", "brand")
+SERVE_DIRS = ("out", "layouts", "inbox/ui-frames", "brand", "inbox/live/previews")
 SOURCES = ("none", "whop_campaign", "written", "public_statement")
 LOG_EDITABLE = ("title", "youtube_url", "instagram_url", "views_24h", "views_7d", "avg_pct_watched",
                 "viewed_vs_swiped", "followers_gained", "shares", "notes")
@@ -75,6 +75,7 @@ class Job:
         self.ended: float | None = None
         self.proc: subprocess.Popen | None = None
         self.stop_requested = False
+        self.result_path: Path | None = None
         self.lock = threading.Lock()
 
     def add(self, text: str, replace: bool = False) -> None:
@@ -90,6 +91,11 @@ class Job:
     def view(self) -> dict:
         with self.lock:
             lines = self.lines[-30:]
+        if self.status == "running" and self.kind == "live" and self.result_path:  # live mode reports as it goes
+            try:
+                self.result = json.loads(self.result_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                pass
         res = dict(self.result) if self.result else None
         if res and str(res.get("file", "")).endswith(".mp4") and (ROOT / res["file"]).exists():
             res["url"] = file_url(ROOT / res["file"])
@@ -139,6 +145,7 @@ def run_job(job: Job) -> None:
         return
     JOB_DIR.mkdir(parents=True, exist_ok=True)
     result_path = JOB_DIR / f"{job.id}.json"
+    job.result_path = result_path
     env = {**os.environ, "PYTHONUNBUFFERED": "1", "CLIPKIT_RESULT": str(result_path), "CLIPKIT_ROOT": str(ROOT)}
     job.status, job.started = "running", time.time()
     rc = 1
@@ -195,7 +202,7 @@ def stop_job(job: Job) -> None:
     p = job.proc
     if p and p.poll() is None:
         try:  # SIGINT lets a recording close its file cleanly
-            os.killpg(p.pid, signal.SIGINT if job.kind == "record" else signal.SIGTERM)
+            os.killpg(p.pid, signal.SIGINT if job.kind in ("record", "live") else signal.SIGTERM)
         except ProcessLookupError:
             pass
 
@@ -327,7 +334,7 @@ def streams_view() -> list[dict]:
     rows = []
     for key, v in st["streams"].items():
         mf = moments_path(v)
-        rows.append({"key": key, "streamer": v.get("streamer", ""), "title": v.get("title", ""),
+        rows.append({"key": key, "streamer": v.get("streamer", ""), "title": v.get("title", ""), "live": bool(v.get("live")),
                      "date": v.get("date", ""), "url": v.get("url", ""), "count": len(v.get("moments") or []),
                      "full": bool(mf and mf.with_suffix(".json").exists()),
                      "t": mf.stat().st_mtime if mf else 0})
@@ -747,6 +754,24 @@ def act_record(b: dict) -> dict:
                       {"streamer": name})).view()
 
 
+def act_live(b: dict) -> dict:
+    name = need_str(b, "name", 60).lower()
+    s = ck.load_streamers().get(name)
+    if not s:
+        raise BadRequest(f"{name} isn't in your streamers list.")
+    if not ck.live_places(s):
+        raise BadRequest(f"{s.get('display', name)} has no Twitch, Kick or YouTube channel in streamers.yaml.")
+    if j := active("live", streamer=name):
+        return j.view()
+    every = b.get("every") or 20
+    try:
+        every = max(5, min(120, int(every)))
+    except (TypeError, ValueError):
+        every = 20
+    return submit(Job("live", f"Follow live · {s.get('display', name)}", ["live", name, "--every", str(every)], None,
+                      {"streamer": name, "every": every})).view()
+
+
 def act_clip_save(b: dict) -> dict:
     mp4 = safe_path(need_str(b, "file", 400), ("out",))
     if mp4.suffix != ".mp4" or not mp4.exists():
@@ -1016,6 +1041,7 @@ POST_ROUTES = {
     "/api/clip/prepare": act_prepare, "/api/clip/recaption": act_recaption, "/api/clip/posttext": act_posttext,
     "/api/fixes": act_fix_add, "/api/fixes/remove": act_fix_remove, "/api/ai/resume": act_ai_resume,
     "/api/brand": act_brand, "/api/brand/logo": act_brand_logo, "/api/brand/apply": act_brand_apply,
+    "/api/live": act_live,
 }
 
 
