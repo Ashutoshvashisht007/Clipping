@@ -1,0 +1,8 @@
+{
+  "name": "clipping-demo",
+  "private": true,
+  "description": "Records the Clipping page and builds the demo video",
+  "dependencies": {
+    "playwright-core": "1.59.1"
+  }
+}

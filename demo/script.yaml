@@ -1,0 +1,103 @@
+# The demo video: what it shows and what the voice says.
+# After editing the words, run   demo/make_demo voice build   (no need to record the screen again).
+# After changing what's clicked (record.js) or the stream, run   demo/make_demo all
+
+voice: af_heart          # Kokoro voice. Hear the choices with: demo/make_demo voices
+speed: 1.0               # speaking speed (0.9 = slower, 1.1 = faster)
+music: demo/music.mp3    # optional background track, mixed quietly under the voice
+music_below_voice: 14    # how many dB quieter than the voice the music sits (it dips more while someone speaks)
+
+stream: https://www.youtube.com/watch?v=7mjhCbFi9Wk   # the stream the demo analyses
+streamer: kaicenat
+streamers_shown: [kaicenat, xqc, rachitroo, mythpat]  # on the Streamers & setup page
+
+title_line: Turns long livestreams into ready-to-post vertical clips
+credit_line: Built by @Ashutoshvashisht007
+page_line: Clips posted on Instagram as @hype_spice
+stack_line: Python · ffmpeg · yt-dlp · Parakeet on MLX · Playwright
+music_credit: "Music: Way Home by Tokyo Music Walker (BreakingCopyright)"   # on the end card; also paste demo/music-credit.txt into the video description
+
+# Each scene: kind (screen = recorded page, card = a still card, clip = the finished clip), and what's said.
+# A line can be plain text, or {say: how it's spoken, show: how it's captioned} when they differ.
+scenes:
+  - id: hook
+    kind: clip
+    seconds: 6
+    note: Found, cut and captioned automatically
+
+  - id: title
+    kind: card
+    say:
+      - "This is Clipping: a tool that turns long livestreams into short vertical clips, ready to post."
+      - "Streamers go live for hours. Finding the thirty seconds worth posting, then cutting and captioning them by hand, takes ages."
+      - "Clipping does it in minutes, on a Mac."
+
+  - id: find
+    kind: screen
+    say:
+      - "Paste a stream link from Twitch, YouTube or Kick."
+      - "It measures the chat and the volume across the whole stream, transcribes the spikes on the Mac, and an AI ranks the moments worth posting."
+
+  - id: moments
+    kind: screen
+    say:
+      - "A two-hour stream becomes a short list."
+      - "Each moment has a title, a hook idea and what was said, so you can judge it in seconds."
+
+  - id: editor
+    kind: screen
+    say:
+      - "Open one, and it plays right here, from the start of the moment."
+      - "Meanwhile, the AI reads the eight minutes before the moment."
+      - "It writes a line of context for the start of the clip, so strangers know what's going on, and moves the start back to where the setup begins."
+
+  - id: make
+    kind: screen
+    say:
+      - "Then, make the clip."
+      - "It downloads only that part, cuts the silences, writes word-by-word captions, adds the page's logo, and renders a vertical video."
+      - "The YouTube and Instagram texts are written too."
+
+  - id: result
+    kind: screen
+    say:
+      - "And here it is: the hook on top, the context line, captions word by word, and the logo."
+
+  - id: captions
+    kind: screen
+    say:
+      - "If a word is misheard, like a player's name, the caption editor fixes it."
+      - "The fix can apply to every future clip of that streamer, too."
+
+  - id: clips
+    kind: screen
+    say:
+      - "Every clip is kept with its titles, a credit to the streamer, and a checklist for before posting."
+
+  - id: streamers
+    kind: screen
+    say:
+      - "Permission is recorded for each streamer. Without it, the tool only makes practice clips."
+      - "Set where the camera sits once, place the logo, and follow a stream live: it checks every twenty minutes and collects moments while the stream is still on."
+
+  - id: hood
+    kind: card
+    say:
+      - say: "Under the hood, it's Python, F F mpeg and Y T D L P, with a small local web page."
+        show: "Under the hood, it's Python, ffmpeg and yt-dlp, with a small local web page."
+        hl: stack
+      - say: "Captions run on the Mac with Parakeet, on Apple's M L X."
+        show: "Captions run on the Mac with Parakeet, on Apple's MLX."
+        hl: step-2
+      - say: "Reading long audio in two-minute pieces cut memory use from eleven gigabytes to three."
+        hl: num-0
+      - say: "Twitch audio is fetched in parallel pieces, five times faster."
+        hl: num-1
+      - say: "And if the AI is down or out of credit, it pauses itself, and the tool keeps working without it."
+        hl: num-3
+
+  - id: end
+    kind: clip
+    say:
+      - "That's Clipping: from a two-hour stream to a ready-to-post clip, in a few minutes."
+      - "Thanks for watching."

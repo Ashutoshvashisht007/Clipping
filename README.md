@@ -1,7 +1,76 @@
 # Clipping
 
-Find the best moments in a stream, then turn them into 1080×1920 clips with word-by-word captions.
-Everything runs on your Mac. The only optional paid step is the AI ranking (about $0.003 per stream on OpenCode Go).
+Turns a two-hour livestream into ready-to-post vertical clips, in a few minutes, on a Mac.
+
+Paste a Twitch, YouTube or Kick link. Clipping finds the moments where chat and volume spike, transcribes them on the
+Mac, and has an AI rank the ones worth posting. Pick one and it makes a 1080×1920 clip with word-by-word captions, a
+hook line, a line of context for viewers who missed the stream, and your logo. It also writes the YouTube and
+Instagram text.
+
+[![Watch the 3-minute demo](docs/demo-poster.png)](docs/clipping-demo.mp4)
+
+**[▶ Watch the 3-minute demo](docs/clipping-demo.mp4)**. The video was recorded, narrated and edited by the tool's own
+script (`demo/`), with no editing by hand.
+
+Built by **Ashutosh Anand Sharma** ([@Ashutoshvashisht007](https://github.com/Ashutoshvashisht007)). Clips are
+posted on Instagram as [@hype_spice](https://www.instagram.com/hype_spice).
+
+## What it does
+
+- **Finds the moments.** Reads the chat replay (Twitch) and the volume across the whole stream, and picks the spikes.
+  Videos of 3 minutes or less become a single moment. Kai Cenat's two-hour first GTA 6 stream gives about ten moments
+  in two to three minutes.
+- **Explains them.** An AI reads the 8 minutes before a moment, writes a short context line for the first seconds of
+  the clip, and moves the start back to where the setup begins.
+- **Makes the clip.** Downloads only that part, cuts the silences, and writes word-by-word captions on the Mac. Then it
+  renders the vertical clip with the camera on top, the hook, the context line and the logo.
+- **Fixes what's misheard.** A caption editor changes a word in one clip or in every future clip of that streamer
+  ("cold warmer" → "Cole Palmer").
+- **Follows streams live.** It checks a live stream every 20 minutes and collects moments while the streamer is still
+  live.
+- **Keeps you honest.** Each streamer's permission is recorded, and without it only practice clips are made.
+  Moments that may spoil GTA 6's story are flagged.
+
+## How it's built
+
+- **Python 3.13** engine (`bin/clipkit.py`), with **ffmpeg** (libass captions), **yt-dlp** and **streamlink** for
+  the streams.
+- **Captions on the Mac:** NVIDIA's Parakeet TDT 0.6B v3 on Apple's MLX. Long audio is read in 2-minute pieces
+  (11 GB → 3 GB of memory), and transcriptions take turns across jobs so the Mac stays responsive.
+- **Twitch audio** is fetched as parallel 10-second pieces: 20 minutes in 30 s instead of 163 s. Chat comes from
+  Twitch's public replay API.
+- **AI ranking and text:** a small model on OpenCode Go, about $0.001 per stream. When the AI is down, refuses the
+  key or runs out of credit, it pauses itself (5 minutes to 12 hours, by cause) and the tool carries on without it.
+- **The page:** a small local web app (standard-library Python server plus plain JavaScript) that runs every step as
+  its own job, with progress, stop and retry.
+- **The demo video:** Playwright drives the real page and records every frame, Kokoro-82M speaks the narration, and
+  ffmpeg cuts it together.
+
+## Install (macOS, Apple Silicon)
+
+```
+brew install ffmpeg-full deno
+python3.13 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/hf download mlx-community/parakeet-tdt-0.6b-v3 --local-dir models/parakeet-tdt-0.6b-v3   # 2.5 GB
+bin/clip check
+```
+
+Then follow [One-time setup](#one-time-setup) below. The AI key (OpenCode Go) is optional: without it, moments are
+ranked by chat and volume only.
+
+## Licence
+
+The code is public so it can be read and evaluated. It is **not open source**: all rights reserved (see `LICENSE`).
+Credits: captions by [Parakeet TDT 0.6B v3](https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v3) (NVIDIA,
+CC BY 4.0); demo voice [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0); demo gameplay from
+[Kai Cenat](https://www.twitch.tv/kaicenat)'s stream.
+Demo music: Tokyo Music Walker - Way Home is under a YouTube Free license
+([artist](https://www.youtube.com/channel/UC3lLfvhpPGtwd5qD25cMDcA)). Music powered by BreakingCopyright:
+https://youtu.be/Q7HjxOAU5Kc. Find more music here: https://breakingcopyright.com
+
+---
+
+# Using it
 
 ## The page (easiest)
 
@@ -104,3 +173,9 @@ Times can be written `1:23:45`, `83:45`, `5025` or `1h23m45s`.
 - No permission proof means no clip, except practice clips.
 - Moments the AI thinks spoil GTA 6's story are flagged. Don't post them.
 - If a clip overlaps one you've already made from the same stream, makeclip stops. Add `--again` to make it anyway.
+
+## Demo video
+
+`demo/make_demo all` records the page and builds a narrated 3-minute demo video (`demo/out/clipping-demo.mp4`), with no
+editing by hand. See `demo/README.md`. After a rebuild, copy it and its poster to `docs/` (`clipping-demo.mp4`,
+`demo-poster.png`) so the README shows the new one.

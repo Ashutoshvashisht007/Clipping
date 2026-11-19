@@ -1,0 +1,3 @@
+#!/bin/zsh
+# Builds the Clipping demo video. See demo/README.md.
+cd "${0:A:h}/.." && exec .venv/bin/python -I demo/make_demo.py "$@"

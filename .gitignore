@@ -27,3 +27,10 @@ brand/_*
 # backups and junk
 *.bak
 .DS_Store
+
+# demo video: tools, recordings and output (rebuilt by demo/make_demo)
+demo/.venv-voice/
+demo/node_modules/
+demo/work/
+demo/out/
+demo/music.*

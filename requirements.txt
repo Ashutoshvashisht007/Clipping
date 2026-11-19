@@ -1,0 +1,8 @@
+# Clipping's Python packages (Python 3.13, macOS on Apple Silicon). Install: .venv/bin/pip install -r requirements.txt
+certifi>=2026.10.23
+numpy>=2.5.4
+PyYAML>=6.0.3
+scipy>=1.18.1
+yt-dlp[default]>=2026.10.26   # keep this one current: YouTube changes often (pip install -U "yt-dlp[default]")
+streamlink>=8.6.3
+parakeet-mlx==0.7.0           # the caption model's runner (pulls in mlx)

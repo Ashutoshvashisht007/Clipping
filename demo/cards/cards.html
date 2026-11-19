@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clipping demo cards</title>
+<style>
+  :root {
+    --bg: #0b0b10; --panel: #15151d; --panel-2: #1c1c26; --line: #2a2a36; --text: #f3f3f6; --muted: #a3a3b2;
+    --faint: #6f6f80; --yellow: #ffe600; --yellow-soft: rgba(255, 230, 0, .14);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, "SF Pro Display", system-ui, "Helvetica Neue", sans-serif; }
+  .stage { position: absolute; inset: 0; overflow: hidden;
+    background: radial-gradient(1200px 700px at 18% -10%, rgba(255, 230, 0, .10), transparent 60%),
+                radial-gradient(1000px 700px at 110% 110%, rgba(120, 90, 255, .12), transparent 60%), var(--bg); }
+  .grid { position: absolute; inset: 0; opacity: .35;
+    background-image: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+    background-size: 48px 48px; mask-image: radial-gradient(ellipse at center, #000 30%, transparent 80%); }
+  .slot { position: absolute; border-radius: 22px; background: #000; box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.06); }
+  .mark { width: 96px; height: 96px; border-radius: 26px; background: var(--yellow); display: grid; place-items: center; box-shadow: 0 18px 50px rgba(255,230,0,.25); }
+  .mark i { display: block; width: 30px; height: 58px; border: 7px solid #111; border-radius: 9px; }
+  h1 { margin: 0; font-size: 132px; letter-spacing: -.035em; font-weight: 800; line-height: 1; }
+  .lede { font-size: 40px; color: var(--muted); margin-top: 22px; letter-spacing: -.01em; }
+  .chips { display: flex; gap: 14px; margin-top: 44px; }
+  .chip { border: 1px solid var(--line); background: rgba(255,255,255,.03); border-radius: 999px; padding: 12px 24px; font-size: 26px; color: var(--muted); }
+  .chip b { color: var(--text); font-weight: 650; }
+  .center { position: absolute; left: 0; right: 0; top: 0; bottom: 140px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+  .center .mark { margin-bottom: 40px; }
+  /* hood */
+  .hood { position: absolute; left: 120px; right: 120px; top: 150px; }
+  .kicker { color: var(--yellow); font-size: 24px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+  .hood h2 { font-size: 72px; margin: 10px 0 46px; letter-spacing: -.03em; }
+  .pipe { display: flex; align-items: stretch; gap: 0; }
+  .step { flex: 1; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 22px 20px; min-height: 150px; }
+  .step .n { color: var(--yellow); font-size: 18px; font-weight: 700; letter-spacing: .08em; }
+  .step b { display: block; font-size: 27px; margin-top: 10px; line-height: 1.2; letter-spacing: -.01em; }
+  .step small { display: block; color: var(--muted); font-size: 20px; margin-top: 8px; line-height: 1.3; }
+  .arrow { width: 34px; display: grid; place-items: center; color: var(--faint); font-size: 28px; }
+  .nums { display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px; margin-top: 34px; }
+  .num { background: linear-gradient(180deg, var(--panel-2), var(--panel)); border: 1px solid var(--line); border-radius: 18px; padding: 26px 26px 24px; }
+  .num .big { font-size: 54px; font-weight: 800; letter-spacing: -.03em; color: var(--yellow); white-space: nowrap; }
+  .num .big span { color: var(--muted); font-weight: 600; }
+  .num .what { font-size: 22px; color: var(--muted); margin-top: 8px; line-height: 1.3; }
+  .stack { margin-top: 30px; color: var(--faint); font-size: 24px; }
+  .hood.has-hl .step, .hood.has-hl .num, .hood.has-hl .stack { opacity: .42; }
+  .hood.has-hl .hl { opacity: 1; border-color: var(--yellow); box-shadow: 0 0 0 2px var(--yellow), 0 20px 60px rgba(255,230,0,.14); }
+  .hood.has-hl .stack.hl { box-shadow: none; color: var(--text); }
+  /* end + hook */
+  .side { position: absolute; left: 150px; top: 0; bottom: 140px; width: 960px; display: flex; flex-direction: column; justify-content: center; }
+  .side h1 { font-size: 120px; margin-top: 34px; }
+  .side .lede { font-size: 38px; line-height: 1.3; }
+  .lines { margin-top: 46px; display: grid; gap: 14px; font-size: 30px; }
+  .lines div { display: flex; gap: 14px; align-items: center; }
+  .lines .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--yellow); flex: none; }
+  .hook-note { position: absolute; top: 0; bottom: 0; display: flex; flex-direction: column; justify-content: center; font-size: 40px; font-weight: 700; letter-spacing: -.02em; line-height: 1.2; }
+  .hook-note small { display: block; font-size: 26px; font-weight: 500; color: var(--muted); margin-top: 14px; letter-spacing: 0; }
+  .mask { position: absolute; left: 0; top: 0; background: #fff; }
+  body.maskpage { background: #000; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const D = window.DATA || {};
+const kind = new URLSearchParams(location.search).get('kind');
+const hl = new URLSearchParams(location.search).get('hl') || '';  // e.g. step-2, num-0, stack
+const root = document.getElementById('root');
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const slot = (r) => `<div class="slot" style="left:${r[0]}px;top:${r[1]}px;width:${r[2]}px;height:${r[3]}px"></div>`;
+const L = D.layout || {};
+
+if (kind === 'bg') {
+  root.innerHTML = `<div class="stage"><div class="grid"></div>${slot(L.screen)}</div>`;
+} else if (kind === 'title') {
+  root.innerHTML = `<div class="stage"><div class="grid"></div><div class="center">
+    <div class="mark"><i></i></div><h1>Clipping</h1><div class="lede">${esc(D.title_line)}</div>
+    <div class="chips"><span class="chip"><b>Twitch</b> · YouTube · Kick</span><span class="chip">Runs on a <b>Mac</b></span><span class="chip">Captions, logo &amp; post text <b>built in</b></span></div>
+  </div></div>`;
+} else if (kind === 'hood') {
+  const steps = [
+    ['Stream link', 'Twitch, YouTube or Kick'], ['Chat + volume', 'spikes across the whole stream'],
+    ['Captions on the Mac', 'Parakeet · MLX'], ['AI ranking', 'best moments + context'],
+    ['Vertical render', 'ffmpeg · word captions · logo'], ['Ready to post', 'clip + YouTube & Instagram text'],
+  ];
+  const nums = [
+    ['11 GB <span>→</span> 3 GB', 'memory for long transcriptions'], ['163 s <span>→</span> 30 s', 'Twitch audio for 20 minutes'],
+    ['≈ $0.001', 'AI cost per stream'], ['Pauses itself', 'when the AI is down or out of credit'],
+  ];
+  const on = (id) => (hl === id ? ' hl' : '');
+  root.innerHTML = `<div class="stage"><div class="grid"></div><div class="hood${hl ? ' has-hl' : ''}">
+    <div class="kicker">Under the hood</div><h2>How a stream becomes a clip</h2>
+    <div class="pipe">${steps.map(([b, s], i) => `${i ? '<div class="arrow">→</div>' : ''}<div class="step${on(`step-${i}`)}"><div class="n">0${i + 1}</div><b>${b}</b><small>${s}</small></div>`).join('')}</div>
+    <div class="nums">${nums.map(([b, w], i) => `<div class="num${on(`num-${i}`)}"><div class="big">${b}</div><div class="what">${w}</div></div>`).join('')}</div>
+    <div class="stack${on('stack')}">${esc(D.stack_line)}</div>
+  </div></div>`;
+} else if (kind === 'end') {
+  root.innerHTML = `<div class="stage"><div class="grid"></div>${slot(L.end_clip)}<div class="side">
+    <div class="mark"><i></i></div><h1>Clipping</h1>
+    <div class="lede">From a two-hour stream to a ready-to-post clip, in a few minutes.</div>
+    <div class="lines"><div><span class="dot"></span>${esc(D.credit_line)}</div><div><span class="dot"></span>${esc(D.page_line)}</div>
+      <div><span class="dot"></span><span style="color:var(--muted)">${esc(D.stack_line)}</span></div></div>
+    ${D.music_credit ? `<div style="margin-top:34px;font-size:22px;color:var(--faint)">♪ ${esc(D.music_credit.replace(/^Music:\s*/, ''))}</div>` : ''}
+  </div></div>`;
+} else if (kind === 'hook') {
+  const r = L.hook_clip;
+  root.innerHTML = `<div class="stage"><div class="grid"></div>${slot(r)}
+    <div class="hook-note" style="left:150px;width:${r[0] - 230}px;text-align:right;align-items:flex-end">${esc(D.hook_note)}<small>from a ${esc(D.stream_length || 'two-hour')} stream</small></div>
+    <div class="hook-note" style="left:${r[0] + r[2] + 80}px;width:520px"><span style="color:var(--yellow)">Clipping</span><small>no editing by hand</small></div>
+  </div>`;
+} else if (kind && kind.startsWith('mask-')) {
+  document.body.classList.add('maskpage');
+  const [w, h, rad] = kind.slice(5).split('x').map(Number);
+  root.innerHTML = `<div class="mask" style="width:${w}px;height:${h}px;border-radius:${rad}px"></div>`;
+}
+</script>
+</body>
+</html>
