@@ -20,6 +20,7 @@ import concurrent.futures as cf
 import csv
 import datetime as dt
 import difflib
+import fcntl
 import hashlib
 import json
 import math
@@ -58,6 +59,7 @@ TWITCH_COMMENTS_HASH = "b70a3591ff0f4e0313d126c6a1502d79a1c02baebb288227c582044a
 
 OUT_W, OUT_H = 1080, 1920
 WIN = 10  # seconds per analysis window
+SHORT_VIDEO_S = 180  # a video this short is already a clip (Shorts and Reels go up to 3 minutes)
 # Chat reaction is the strongest signal; volume only helps, and is capped so a loud game
 # sound can't outrank a moment chat actually reacted to.
 CHAT_WEIGHT, LOUD_WEIGHT, LOUD_CAP = 0.7, 0.3, 4.0
@@ -414,6 +416,7 @@ def wav_seconds_db(path: Path) -> np.ndarray:
 
 
 _ASR = None
+ASR_CHUNK_S = 120  # longest audio the caption model reads in one pass; longer audio goes in overlapping pieces
 
 
 def model_path(cfg: dict) -> Path:
@@ -432,9 +435,47 @@ def asr(cfg: dict):
     return _ASR
 
 
+class asr_turn:
+    """One transcription at a time across every clipkit process (the page runs find, make and context as
+    separate processes, each with its own copy of the model). A second one waits here for its turn."""
+
+    def __enter__(self):
+        lock = ROOT / "inbox" / "_asr.lock"  # "_": the 7-day inbox clean-up leaves it alone
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        self.f = open(lock, "a")
+        try:
+            fcntl.flock(self.f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            say("  (waiting for another transcription on this Mac to finish...)")
+            fcntl.flock(self.f, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.f, fcntl.LOCK_UN)
+        self.f.close()
+        return False
+
+
+def free_asr_memory() -> None:
+    """Hand the model's working memory back to macOS (it keeps it cached otherwise, while this process renders
+    or waits for the AI). The model itself stays loaded."""
+    try:
+        import mlx.core as mx
+        mx.clear_cache()
+    except Exception:
+        pass
+
+
 def transcribe(cfg: dict, path: Path):
     """Return (words, sentences): words = [{text, start, end}], sentences = [(start, text)]."""
-    r = asr(cfg).transcribe(str(path))
+    # Long audio (the context read's 8 minutes) goes through in 2-minute pieces: in one pass the model's memory
+    # grows with the square of the length (11 GB for 8.5 min vs 3 GB in pieces) and the whole Mac lags.
+    # Audio of 2 minutes or less (clips, find-moments pieces) is still read in one pass, exactly as before.
+    with asr_turn():
+        try:
+            r = asr(cfg).transcribe(str(path), chunk_duration=ASR_CHUNK_S)
+        finally:
+            free_asr_memory()
     words: list[dict] = []
     sentences: list[tuple[float, str]] = []
     for s in r.sentences:
@@ -827,9 +868,11 @@ def rank_with_ai(cfg: dict, cands: list[dict], meta: dict, top: int):
     for c in cands:
         lines = "\n".join(f"[{fmt_time(t)}] {txt}" for t, txt in c["sentences"]) or "(no speech)"
         chat = ("\nchat said: " + " | ".join(c["chat_samples"])) if c["chat_samples"] else ""
-        sig = f"volume +{c['loud_db']:.0f} dB" + (f", chat {c['chat_x']:.1f}x normal" if c["chat_x"] else "")
+        sig = [f"volume +{c['loud_db']:.0f} dB"] if c["loud_db"] is not None else ["a short highlight video"]
+        if c["chat_x"]:
+            sig.append(f"chat {c['chat_x']:.1f}x normal")
         blocks.append(f"### Candidate {c['id']} (peak {fmt_time(c['peak'])}; transcript range "
-                      f"{fmt_time(c['seg_start'])}-{fmt_time(c['seg_end'])}; {sig}){chat}\n{lines}")
+                      f"{fmt_time(c['seg_start'])}-{fmt_time(c['seg_end'])}; {', '.join(sig)}){chat}\n{lines}")
     user = f"Streamer: {meta['streamer']}\nStream title: {meta['title']}\n\n" + "\n\n".join(blocks)
     messages = [{"role": "system", "content": SYSTEM_PROMPT.replace("{top}", str(top))},
                 {"role": "user", "content": user}]
@@ -961,7 +1004,10 @@ def cmd_findmoments(a) -> None:
     duration = float(info.get("duration") or 0)
     a0 = parse_time(a.from_) if a.from_ else 0.0
     b0 = min(parse_time(a.to), duration) if a.to else duration
-    if b0 - a0 < 120:
+    # A video of 3 minutes or less is already a highlight: there's no quieter stretch to measure spikes against,
+    # so nothing would stand out. The whole video becomes the moment instead (plus the AI's best part).
+    short = 0 < duration <= SHORT_VIDEO_S and not a.live and not a.from_ and not a.to
+    if b0 - a0 < 120 and not short:
         raise ClipError("The part to analyse is shorter than 2 minutes. Check --from/--to.")
     streamer = resolve_streamer_name(a.streamer, info)
     s_conf = load_streamers().get(streamer)
@@ -970,92 +1016,109 @@ def cmd_findmoments(a) -> None:
     nwin = int(math.ceil((b0 - a0) / WIN))
     say(f"  {(info.get('title') or '')[:70]}  ({fmt_time(a0)}–{fmt_time(b0)})")
 
-    chat = None
-    if src["kind"] == "twitch":
-        chat = twitch_chat(src["id"], a0, b0)
-    elif src["kind"] == "youtube":
-        chat = youtube_chat(src, work, a0, b0)
-    heat = heat_windows(info, a0, nwin) if src["kind"] == "youtube" else None
-
     n_cands = int(a.candidates or cfg["findmoments"]["candidates"])
     top = int(a.top or cfg["findmoments"]["top"])
-    rate = chat_rate(chat, a0, nwin) if chat else None
-    chat_z = None
-    if rate is not None:
-        z = robust_z(np.log1p(rate))
-        chat_z = np.array([z[k: k + 3].max() for k in range(nwin)])  # chat reacts 0-30 s after the moment
-    # live: the part is short and its audio quick to fetch, so measure the volume of all of it
-    quick = chat is not None and not a.full_audio and not a.live
-    audio_in = info["_input"][0]
-    src_offset = 0.0  # sections are cut from a source whose time 0 is the stream's start
-    local_audio = None
-    if src["kind"] == "youtube":
-        # YouTube throttles direct reads to ~2x playback speed. yt-dlp's chunked downloader is fast and
-        # the audio is small (~22 MB per hour), so fetch it once and cut everything from the local copy.
-        local_audio = fetch_audio(src, work, None)
-        audio_in = {"url": str(local_audio), "headers": None}
-
-    loud = loud_z = None
-    window = None  # live: this part's audio, deleted once the moments are cut from it
-    if not quick:
-        if a.live and src["kind"] == "twitch":
-            step(f"Downloading the audio of {fmt_time(a0)}–{fmt_time(b0)}...")
-            window = work / f"window-{int(a0)}-{int(b0)}.ts"
-            audio_path, offset = window, hls_window(info["_input"][0], a0, b0, window)
-        elif a.live and src["kind"] == "file":  # a recording that's still growing: read only this part
-            window = work / f"window-{int(a0)}-{int(b0)}.wav"
-            run([FFMPEG, "-v", "error", "-y", "-ss", f"{a0:.2f}", "-t", f"{b0 - a0:.2f}", "-i", src["path"],
-                 "-vn", "-ac", "1", "-ar", "16000", window])
-            audio_path, offset = window, a0
-        elif src["kind"] == "file":
-            audio_path, offset = Path(src["path"]), 0.0
-        elif local_audio is not None:
-            audio_path, offset = local_audio, 0.0
-        else:  # Twitch / Kick serve HLS, where downloading just the needed range is fast
-            whole = a0 <= 0 and b0 >= duration - 1
-            audio_path = fetch_audio(src, work, None if whole else (a0, b0))
-            offset = 0.0 if whole else a0
-        step("Measuring volume...")
-        per_sec = loudness_per_sec(audio_path)
-        start_sec = int(a0 - offset)
-        per_sec = per_sec[start_sec: start_sec + nwin * WIN]
-        per_sec = np.pad(per_sec, (0, max(0, nwin * WIN - len(per_sec))), constant_values=-90)
-        loud = per_sec.reshape(nwin, WIN)
-        loud_win = np.percentile(loud, 90, axis=1)
-        loud_z = robust_z(loud_win)
-        audio_in = {"url": str(audio_path), "headers": None}
-        src_offset = offset
-
-    score = np.zeros(nwin)
-    if chat_z is not None and loud_z is not None:
-        score = CHAT_WEIGHT * chat_z + LOUD_WEIGHT * np.clip(loud_z, -2, LOUD_CAP)
-    elif chat_z is not None:
-        score = chat_z.copy()
-    elif loud_z is not None:
-        score = loud_z.copy()
-    if heat is not None:
-        score = score + 0.5 * heat
-
-    pool = pick_peaks(score, int(n_cands * 1.6) if quick else n_cands)
-    if not pool:
-        raise ClipError("Nothing stood out in this part of the stream (no chat or volume spikes).")
-    cands = []
-    for i, k in enumerate(sorted(pool), 1):
-        if loud is not None:
-            p = a0 + k * WIN + int(np.argmax(loud[k]))
+    if short:
+        say(f"  This video is only {fmt_time(duration)} long, so the whole video is the moment.")
+        chat, quick = None, False
+        if src["kind"] == "file":
+            whole_audio = Path(src["path"])
         else:
-            p = a0 + k * WIN + WIN / 2
-        c = {"id": i, "k": k, "peak": p, "seg_start": max(a0, p - 75), "seg_end": min(b0, p + 30),
-             "score": float(score[k]), "chat_z": float(chat_z[k]) if chat_z is not None else 0.0,
-             "chat_x": local_ratio(rate, k) if rate is not None else 0.0,
-             "loud_db": float(loud_win[k] - np.median(loud_win)) if loud is not None else 0.0,
-             "heat": float(heat[k]) if heat is not None else 0.0, "_offset": src_offset}
-        cands.append(c)
+            whole_audio = fetch_audio(src, work, None)
+        c = {"id": 1, "k": 0, "peak": 0.0, "seg_start": 0.0, "seg_end": duration, "score": 0.0, "chat_z": 0.0,
+             "chat_x": 0.0, "loud_db": None, "heat": 0.0, "_offset": 0.0}
+        section_wavs({"url": str(whole_audio), "headers": None}, [c], work, threads=1)
+        c["peak"] = float(np.argmax(wav_seconds_db(c["wav"])))  # its loudest second
+        cands = [c]
+    else:
+        chat = None
+        if src["kind"] == "twitch":
+            chat = twitch_chat(src["id"], a0, b0)
+        elif src["kind"] == "youtube":
+            chat = youtube_chat(src, work, a0, b0)
+        heat = heat_windows(info, a0, nwin) if src["kind"] == "youtube" else None
 
-    step(f"Grabbing audio around {len(cands)} spikes...")
-    section_wavs(audio_in, cands, work, threads=4 if quick else 6)
-    if window is not None:
-        window.unlink(missing_ok=True)
+        rate = chat_rate(chat, a0, nwin) if chat else None
+        chat_z = None
+        if rate is not None:
+            z = robust_z(np.log1p(rate))
+            chat_z = np.array([z[k: k + 3].max() for k in range(nwin)])  # chat reacts 0-30 s after the moment
+        # live: the part is short and its audio quick to fetch, so measure the volume of all of it
+        quick = chat is not None and not a.full_audio and not a.live
+        audio_in = info["_input"][0]
+        src_offset = 0.0  # sections are cut from a source whose time 0 is the stream's start
+        local_audio = None
+        if src["kind"] == "youtube":
+            # YouTube throttles direct reads to ~2x playback speed. yt-dlp's chunked downloader is fast and
+            # the audio is small (~22 MB per hour), so fetch it once and cut everything from the local copy.
+            local_audio = fetch_audio(src, work, None)
+            audio_in = {"url": str(local_audio), "headers": None}
+
+        loud = loud_z = None
+        window = None  # live: this part's audio, deleted once the moments are cut from it
+        if not quick:
+            if a.live and src["kind"] == "twitch":
+                step(f"Downloading the audio of {fmt_time(a0)}–{fmt_time(b0)}...")
+                window = work / f"window-{int(a0)}-{int(b0)}.ts"
+                audio_path, offset = window, hls_window(info["_input"][0], a0, b0, window)
+            elif a.live and src["kind"] == "file":  # a recording that's still growing: read only this part
+                window = work / f"window-{int(a0)}-{int(b0)}.wav"
+                run([FFMPEG, "-v", "error", "-y", "-ss", f"{a0:.2f}", "-t", f"{b0 - a0:.2f}", "-i", src["path"],
+                     "-vn", "-ac", "1", "-ar", "16000", window])
+                audio_path, offset = window, a0
+            elif src["kind"] == "file":
+                audio_path, offset = Path(src["path"]), 0.0
+            elif local_audio is not None:
+                audio_path, offset = local_audio, 0.0
+            else:  # Twitch / Kick serve HLS, where downloading just the needed range is fast
+                whole = a0 <= 0 and b0 >= duration - 1
+                audio_path = fetch_audio(src, work, None if whole else (a0, b0))
+                offset = 0.0 if whole else a0
+            step("Measuring volume...")
+            per_sec = loudness_per_sec(audio_path)
+            start_sec = int(a0 - offset)
+            per_sec = per_sec[start_sec: start_sec + nwin * WIN]
+            per_sec = np.pad(per_sec, (0, max(0, nwin * WIN - len(per_sec))), constant_values=-90)
+            loud = per_sec.reshape(nwin, WIN)
+            loud_win = np.percentile(loud, 90, axis=1)
+            loud_z = robust_z(loud_win)
+            audio_in = {"url": str(audio_path), "headers": None}
+            src_offset = offset
+
+        score = np.zeros(nwin)
+        if chat_z is not None and loud_z is not None:
+            score = CHAT_WEIGHT * chat_z + LOUD_WEIGHT * np.clip(loud_z, -2, LOUD_CAP)
+        elif chat_z is not None:
+            score = chat_z.copy()
+        elif loud_z is not None:
+            score = loud_z.copy()
+        if heat is not None:
+            score = score + 0.5 * heat
+
+        pool = pick_peaks(score, int(n_cands * 1.6) if quick else n_cands)
+        if not pool and not a.live and duration <= 15 * 60:
+            # a short video that's lively all the way through: nothing stands out, so take its liveliest parts
+            warn("Nothing clearly stood out (the video is lively all the way through); using its liveliest parts.")
+            pool = pick_peaks(score, n_cands, min_score=-99)
+        if not pool:
+            raise ClipError("Nothing stood out in this part of the stream (no chat or volume spikes).")
+        cands = []
+        for i, k in enumerate(sorted(pool), 1):
+            if loud is not None:
+                p = a0 + k * WIN + int(np.argmax(loud[k]))
+            else:
+                p = a0 + k * WIN + WIN / 2
+            c = {"id": i, "k": k, "peak": p, "seg_start": max(a0, p - 75), "seg_end": min(b0, p + 30),
+                 "score": float(score[k]), "chat_z": float(chat_z[k]) if chat_z is not None else 0.0,
+                 "chat_x": local_ratio(rate, k) if rate is not None else 0.0,
+                 "loud_db": float(loud_win[k] - np.median(loud_win)) if loud is not None else 0.0,
+                 "heat": float(heat[k]) if heat is not None else 0.0, "_offset": src_offset}
+            cands.append(c)
+
+        step(f"Grabbing audio around {len(cands)} spikes...")
+        section_wavs(audio_in, cands, work, threads=4 if quick else 6)
+        if window is not None:
+            window.unlink(missing_ok=True)
 
     if quick:  # measure volume inside each section now that we have it
         for c in cands:
@@ -1070,14 +1133,15 @@ def cmd_findmoments(a) -> None:
             if len(around):  # move the peak to the loudest second near it
                 c["peak"] = c["seg_start"] + max(0, rel - 5) + int(np.argmax(around))
 
-    step(f"Transcribing {len(cands)} moments (on your Mac)...")
+    step(f"Transcribing {len(cands)} moment{'s' if len(cands) != 1 else ''} (on your Mac)...")
     for c in cands:
         words, sents = transcribe(cfg, c["wav"])
         c["sentences"] = [(c["seg_start"] + t, txt) for t, txt in sents]
         c["words_near"] = sum(1 for w in words if -20 <= c["seg_start"] + w["start"] - c["peak"] <= 15)
         c["chat_samples"] = chat_samples(chat, c["peak"])
     before = len(cands)
-    cands = [c for c in cands if c["words_near"] >= 4 or c["chat_z"] >= 1.5]  # loud, but nobody talking
+    if not short:  # drop loud moments where nobody is talking
+        cands = [c for c in cands if c["words_near"] >= 4 or c["chat_z"] >= 1.5]
     if before - len(cands):
         say(f"    dropped {before - len(cands)} loud moments where nobody was talking")
     cands = sorted(cands, key=lambda c: -c["score"])[:n_cands]
@@ -1121,6 +1185,16 @@ def cmd_findmoments(a) -> None:
             moments.append({"cand": c, "start": s, "end": e, "score": None, "title": first[:60],
                             "why": "", "hook": "", "spoiler": False})
         ai = None
+    if short:
+        # moment 1 is the whole video; the AI's pick (when it chose a shorter part) comes second
+        c = cands[0]
+        best = moments[0] if ai and moments else None
+        moments = [{"cand": c, "start": 0.0, "end": duration, "score": best["score"] if best else None,
+                    "title": re.sub(r"\s+", " ", info.get("title") or "").strip()[:80] or "Whole video",
+                    "why": f"The whole video ({fmt_time(duration)}). Trim it in the editor if you like.",
+                    "hook": best["hook"] if best else "", "spoiler": bool(best and best["spoiler"])}]
+        if best and best["end"] - best["start"] < duration - 15:
+            moments.append({**best, "why": ("The best part. " + best["why"]).strip()})
 
     # write the moments file
     day = dt.date.today().isoformat()
@@ -1129,6 +1203,8 @@ def cmd_findmoments(a) -> None:
     out = out_dir / f"{day}-{src['key']}.md"
     made = [x for x in st["clips"] if x.get("key") == src["key"]]
     usage_line = "Ranked by chat and volume only" if chat else "Ranked by volume only (no chat replay for this video)"
+    if short:
+        usage_line = f"A short video ({fmt_time(duration)}): the whole video is the moment"
     if ai:
         u = ai["usage"]
         pin, pout = int(u.get("prompt_tokens", 0)), int(u.get("completion_tokens", 0))
@@ -1150,11 +1226,11 @@ def cmd_findmoments(a) -> None:
         lines.append(f"## {i}. {title}{score}")
         if m["why"]:
             lines.append(m["why"])
-        sig = [f"volume +{c['loud_db']:.0f} dB"]
+        sig = [f"volume +{c['loud_db']:.0f} dB"] if c["loud_db"] is not None else []
         if c["chat_x"]:
             sig.insert(0, f"chat {c['chat_x']:.1f}× normal")
         lines += ["", f"- **Watch:** {link_at(src, m['start'])}",
-                  f"- **Clip:** {fmt_time(m['start'])} → {fmt_time(m['end'])} ({int(m['end'] - m['start'])} s) · {', '.join(sig)}"]
+                  f"- **Clip:** {fmt_time(m['start'])} → {fmt_time(m['end'])} ({int(m['end'] - m['start'])} s)" + (f" · {', '.join(sig)}" if sig else "")]
         if m["hook"]:
             lines.append(f"- **Hook idea:** {m['hook']}")
         if m["spoiler"]:
@@ -2214,9 +2290,29 @@ def cmd_makeclip(a) -> None:
 # ───────────────────────────── camera box ─────────────────────────────
 
 def grab_frame(src: dict, t: float, out: Path) -> None:
-    info = probe(src, "bv*[height<=1080]/b")
-    inp = info["_input"][0]
-    run([FFMPEG, "-v", "error", "-y", *ff_input(inp, t), "-frames:v", "1", str(out)])
+    if src["kind"] != "youtube":  # Twitch, Kick and files can be read directly
+        info = probe(src, "bv*[height<=1080]/b")
+        try:
+            run([FFMPEG, "-v", "error", "-y", *ff_input(info["_input"][0], t), "-frames:v", "1", str(out)])
+            return
+        except ClipError:
+            if src["kind"] == "file":
+                raise
+            warn("reading the stream directly didn't work; downloading a short piece instead")
+    # YouTube refuses direct reads (403 Forbidden): download a 2-second piece through yt-dlp, which handles
+    # YouTube's checks, and take the frame from that (the same way clips are made)
+    tmp = out.parent / f".frame-{uuid.uuid4().hex[:8]}"
+    tmp.mkdir(parents=True, exist_ok=True)
+    try:
+        run([*YTDLP, "--no-warnings", "-q", "--ffmpeg-location", str(FFBIN), "-f", "bv*[height<=1080]/b[height<=1080]/b",
+             "--download-sections", f"*{t:.2f}-{t + 2:.2f}", "--force-keyframes-at-cuts",
+             "-o", str(tmp / "piece.%(ext)s"), src["url"]])
+        got = [p for p in tmp.iterdir() if p.name.startswith("piece.") and not p.name.endswith((".part", ".ytdl"))]
+        if not got:
+            raise ClipError("the frame download didn't produce a file")
+        run([FFMPEG, "-v", "error", "-y", "-i", got[0], "-frames:v", "1", str(out)])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def select_box(frame: Path, title: str):

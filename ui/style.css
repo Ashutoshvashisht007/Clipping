@@ -147,6 +147,14 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
   border-radius: var(--radius-s); padding: 9px 10px; cursor: pointer; font: inherit; margin-bottom: 4px;
 }
 .stream:hover { background: var(--panel); }
+.stream-row { position: relative; }
+.stream-row .stream { padding-right: 30px; }
+.stream-del {
+  position: absolute; top: 6px; right: 4px; width: 24px; height: 24px; border: 0; border-radius: 6px; background: none;
+  color: var(--faint); font-size: 12px; cursor: pointer; opacity: .55;
+}
+.stream-row:hover .stream-del, .stream-del:focus-visible { opacity: 1; }
+.stream-del:hover { background: var(--panel-3); color: var(--bad); }
 .stream.active { background: var(--panel-2); border-color: var(--line-2); }
 .stream-who { display: block; font-weight: 650; }
 .stream-title { display: block; color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

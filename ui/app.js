@@ -219,6 +219,8 @@ const ACTS = {
   },
   'find-file': (el) => startFind(el.dataset.file, { streamer: el.dataset.name, again: true }),
   'live-follow': (el) => followLive(el.dataset.name),
+  'stream-delete': (el) => deleteStream(el.dataset.key),
+  'streamer-delete': (el) => deleteStreamer(el.dataset.name),
   'close-jobs': () => { S.jobsOpen = false; renderJobs(); },
 };
 
@@ -320,12 +322,25 @@ function renderFindJobs() {
 function renderStreams() {
   const el = $('#streams');
   if (!S.streams.length) { el.innerHTML = '<p class="empty small">Nothing analysed yet. Paste a stream link above.</p>'; return; }
-  el.innerHTML = S.streams.map((s) => `
+  el.innerHTML = S.streams.map((s) => `<div class="stream-row">
     <button class="stream ${S.stream && S.stream.key === s.key ? 'active' : ''}" data-act="open-stream" data-key="${esc(s.key)}">
       <span class="stream-who">${esc(displayOf(s.streamer))}${s.live ? ' <span class="badge live">LIVE</span>' : ''}</span>
       <span class="stream-title">${esc(s.title || s.url)}</span>
-      <span class="stream-meta">${esc(s.date)} · ${s.count} moments</span>
-    </button>`).join('');
+      <span class="stream-meta">${esc(s.date)} · ${s.count} moment${s.count === 1 ? '' : 's'}</span>
+    </button>
+    <button class="stream-del" data-act="stream-delete" data-key="${esc(s.key)}" aria-label="Delete this stream" title="Delete this stream">✕</button></div>`).join('');
+}
+
+async function deleteStream(key) {
+  const s = S.streams.find((x) => x.key === key); if (!s) return;
+  if (!confirm(`Delete “${s.title || s.url}” from Find moments?\n\nIts moments file goes to the Bin and the audio downloaded to analyse it is deleted. Clips you made from it stay in Clips. You can analyse the link again any time.`)) return;
+  try {
+    const r = await api('/api/stream/delete', { key });
+    S.streams = r.streams;
+    if (S.stream && S.stream.key === key) { S.stream = null; closeEditor(false); renderMoments(); }
+    renderStreams();
+    toast('Stream deleted', 'good', 2500);
+  } catch (e) { toast(e.message, 'bad', 7000); }
 }
 
 async function openStream(key) {
@@ -1013,9 +1028,23 @@ function streamerCard(s) {
       })()}
       ${recording ? `<span class="rec-on small">Recording</span><button class="btn small" data-act="stop-job" data-id="${rec.id}">Stop</button>`
         : `<button class="btn small ghost" data-act="record" data-name="${esc(s.name)}" title="Records their live stream to inbox/live (volume only, no chat)">Record live</button>`}
-      ${recFile ? `<button class="btn small" data-act="find-file" data-file="${esc(recFile)}" data-name="${esc(s.name)}">Find moments in the recording</button>` : ''}</div>
+      ${recFile ? `<button class="btn small" data-act="find-file" data-file="${esc(recFile)}" data-name="${esc(s.name)}">Find moments in the recording</button>` : ''}
+      <button class="btn small ghost danger" data-act="streamer-delete" data-name="${esc(s.name)}" title="Remove ${esc(s.display)} from your streamers">Delete</button></div>
     ${s.notes ? `<p class="notes small">${esc(s.notes)}</p>` : ''}
   </article>`;
+}
+
+async function deleteStreamer(name) {
+  const s = S.streamers.find((x) => x.name === name); if (!s) return;
+  const n = S.streams.filter((x) => x.streamer === name).length;
+  if (!confirm(`Delete ${s.display}?\n\nThey’re removed from streamers.yaml (the old file is kept as streamers.yaml.bak) and their camera box goes to the Bin.${n ? ` Their ${n} analysed stream${n === 1 ? '' : 's'} stay${n === 1 ? 's' : ''} in Find moments (delete ${n === 1 ? 'it' : 'them'} there with ✕).` : ''} Clips you made of them stay in Clips.`)) return;
+  try {
+    const r = await api('/api/streamer/delete', { name });
+    S.streamers = r.streamers;
+    renderStreamers(); loadStreamers();
+    if (S.stream) renderMoments();
+    toast(`${s.display} deleted`, 'good', 2500);
+  } catch (e) { toast(e.message, 'bad', 7000); }
 }
 
 function addCard() {

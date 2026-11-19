@@ -1,12 +1,12 @@
 {
   "mode": "camera_top",
   "cam": [
-    0.0020833333333333333,
-    0.002777777777777778,
-    0.24791666666666667,
-    0.25
+    0.0015625,
+    0.4,
+    0.20208333333333334,
+    0.2111111111111111
   ],
   "game_center": 0.5,
-  "set_from": "https://www.youtube.com/watch?v=juFnXA7rhOk at 28:39",
-  "set_on": "2026-11-13"
+  "set_from": "https://www.youtube.com/watch?v=7mjhCbFi9Wk at 1:23:43",
+  "set_on": "2026-11-19"
 }

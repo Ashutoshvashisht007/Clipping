@@ -1010,14 +1010,10 @@ def act_clip_log(b: dict) -> dict:
     return {"ok": True, "log": r}
 
 
-def act_clip_trash(b: dict) -> dict:
-    mp4 = safe_path(need_str(b, "file", 400), ("out",))
-    if mp4.suffix != ".mp4":
-        raise BadRequest("Only clips can be deleted here.")
-    orig = ck.UNBRANDED / rel(mp4).replace("/", "__")  # its copy without the logo, if it has one
-    files = [p for p in (mp4, mp4.with_suffix(".txt"), mp4.with_suffix(".json"), orig) if p.exists()]
+def to_bin(files: list[Path]) -> None:
+    """Move files to the Mac's Bin, so a delete can still be undone from Finder."""
     if not files:
-        raise NotFound("That clip is already gone.")
+        return
     if Path("/usr/bin/trash").exists():
         res = subprocess.run(["/usr/bin/trash", *map(str, files)], capture_output=True, text=True)
         if res.returncode:
@@ -1026,6 +1022,17 @@ def act_clip_trash(b: dict) -> dict:
         bin_dir = Path.home() / ".Trash"
         for p in files:
             shutil.move(str(p), str(bin_dir / f"{p.stem}-{uuid.uuid4().hex[:4]}{p.suffix}"))
+
+
+def act_clip_trash(b: dict) -> dict:
+    mp4 = safe_path(need_str(b, "file", 400), ("out",))
+    if mp4.suffix != ".mp4":
+        raise BadRequest("Only clips can be deleted here.")
+    orig = ck.UNBRANDED / rel(mp4).replace("/", "__")  # its copy without the logo, if it has one
+    files = [p for p in (mp4, mp4.with_suffix(".txt"), mp4.with_suffix(".json"), orig) if p.exists()]
+    if not files:
+        raise NotFound("That clip is already gone.")
+    to_bin(files)
     st = ck.load_state()
     keep = [c for c in st["clips"] if Path(c.get("file", "")).resolve() != mp4]
     if len(keep) != len(st["clips"]):
@@ -1036,6 +1043,74 @@ def act_clip_trash(b: dict) -> dict:
     if len(kept) != len(rows):
         write_log(cols, kept)
     return {"ok": True}
+
+
+def remove_streamer(name: str) -> None:
+    before = set(ck.load_streamers())
+
+    def transform(text: str) -> str:
+        lines = text.split("\n")
+        start, end, dash = block_of(lines, name)
+        # keep the blank lines and comments that lead into the next streamer; drop the gap before this one
+        cut = end
+        while cut > start + 1 and (not lines[cut - 1].strip() or (lines[cut - 1].lstrip().startswith("#")
+                                                                    and len(lines[cut - 1]) - len(lines[cut - 1].lstrip()) <= dash)):
+            cut -= 1
+        if start > 0 and not lines[start - 1].strip():
+            start -= 1
+        return "\n".join(lines[:start] + lines[cut:])
+
+    def check(found: dict) -> bool:
+        return set(found) == before - {name}
+
+    edit_streamers(transform, check)
+
+
+def act_streamer_delete(b: dict) -> dict:
+    name = need_str(b, "name", 60).lower()
+    s = ck.load_streamers().get(name)
+    if not s:
+        raise NotFound(f"{name} isn't in your streamers list.")
+    for kind, what in (("live", "Following live"), ("record", "Recording")):
+        if active(kind, streamer=name):
+            raise BadRequest(f"{what} is still on for {s.get('display', name)}. Press Stop first.")
+    remove_streamer(name)
+    lay = ROOT / "layouts"  # their camera box and its pictures
+    to_bin([p for p in (lay / f"{name}.json", lay / f"{name}-preview.png", lay / f"{name}-frame.png",
+                        lay / f"{name}-frame-display.png") if p.exists()])
+    return {"streamers": streamers_view()}
+
+
+def act_stream_delete(b: dict) -> dict:
+    key = need_str(b, "key", 200)
+    st = ck.load_state()
+    v = st["streams"].get(key)
+    if not v:
+        raise NotFound("That stream is already gone.")
+    if active("find", key=key):
+        raise BadRequest("Moments are still being found in this stream. Stop that first.")
+    if v.get("live") and active("live", streamer=v.get("streamer")):
+        raise BadRequest("This stream is being followed live. Press Stop on it (Streamers & setup) first.")
+    # the moments files go to the Bin; the downloads made to analyse it are deleted (they're only a cache).
+    # Clip pieces (clip-*) stay, so Edit captions on clips made from this stream still works without downloading.
+    mf = moments_path(v)
+    files = [p for p in ({mf, mf.with_suffix(".json"), mf.with_suffix(".md")} if mf else set()) if p.exists()]
+    to_bin(sorted(files))
+    work = ROOT / "inbox" / key
+    if re.fullmatch(r"[\w.-]+", key) and work.is_dir():
+        for p in work.iterdir():
+            if p.name.startswith("clip-"):
+                continue
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                p.unlink(missing_ok=True)
+    for p in (ROOT / "inbox" / "live" / "previews").glob(f"{key}-*.mp4"):
+        p.unlink(missing_ok=True)
+    st = ck.load_state()
+    st["streams"].pop(key, None)
+    ck.save_state(st)
+    return {"streams": streams_view()}
 
 
 def act_reveal(b: dict) -> dict:
@@ -1072,6 +1147,7 @@ POST_ROUTES = {
     "/api/fixes": act_fix_add, "/api/fixes/remove": act_fix_remove, "/api/ai/resume": act_ai_resume,
     "/api/brand": act_brand, "/api/brand/logo": act_brand_logo, "/api/brand/apply": act_brand_apply,
     "/api/live": act_live, "/api/context": act_context,
+    "/api/streamer/delete": act_streamer_delete, "/api/stream/delete": act_stream_delete,
 }
 
 

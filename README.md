@@ -10,7 +10,10 @@ your browser at http://localhost:8765. Keep that Terminal window open while you 
 
 - **Find moments:** paste a stream link and press Find moments. Click a moment to watch it right there, set the start
   and end (±1 s buttons, or "Start/End = video's time now"), add a hook and press **Make clip**.
-  A single Twitch clip link works too: it goes straight to making the clip.
+  A single Twitch clip link works too: it goes straight to making the clip. A video of 3 minutes or less (an
+  already-edited highlight) becomes one moment covering the whole video, plus the AI's pick of its best part.
+  The ✕ on a stream in the list deletes it: its moments file goes to the Bin and the analysis download is deleted;
+  clips made from it stay.
   **Context:** when you open a moment, the tool reads the 8 minutes before it (with the AI on). It fills in a
   **context line** that's shown for the first few seconds of the clip, so strangers get what's going on, and a
   **background** sentence that opens the YouTube and Instagram text. It also moves the start back to where the
@@ -33,8 +36,11 @@ your browser at http://localhost:8765. Keep that Terminal window open while you 
   Streamers & setup → "Your logo on every clip" sets where it goes and how big, changes the logo, and updates
   existing clips to match (Terminal: `clip brand logo <picture>`, `clip brand apply`). Clips the logo was added to
   afterwards keep a logo-free copy in `inbox/_unbranded/`, so moving or removing the logo never doubles it.
-- **Streamers & setup:** record each streamer's permission, set their camera box by dragging on a frame, add
-  streamers, record a live stream, and check that the tools, caption model and AI key are found.
+- **Streamers & setup:** record each streamer's permission, set their camera box by dragging on a frame, add or
+  delete streamers, record a live stream, and check that the tools, caption model and AI key are found.
+  Deleting a streamer keeps a copy of the old list as `streamers.yaml.bak`; their streams and clips stay.
+- **One transcription at a time:** Find, Make and Context can run together, but they take turns on the caption
+  model, so the Mac stays responsive. Long audio is read in 2-minute pieces.
 
 The page only listens on this Mac. It runs the same commands as below, so everything still works from Terminal too.
 

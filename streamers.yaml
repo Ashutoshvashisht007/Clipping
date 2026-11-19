@@ -106,3 +106,15 @@ streamers:
       platforms: [youtube_shorts, instagram_reels]
       monetize: false
       checked_on: ""
+
+  - name: speeduniverse
+    display: "IshowSpeed"
+    channel: "https://www.youtube.com/@speedyboykins7869"
+    credit: "@speeduniverse"
+    language: en
+    permission:
+      source: none
+      proof: ""
+      platforms: [youtube_shorts, instagram_reels]
+      monetize: false
+      checked_on: ""
