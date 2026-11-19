@@ -11,6 +11,11 @@ your browser at http://localhost:8765. Keep that Terminal window open while you 
 - **Find moments:** paste a stream link and press Find moments. Click a moment to watch it right there, set the start
   and end (±1 s buttons, or "Start/End = video's time now"), add a hook and press **Make clip**.
   A single Twitch clip link works too: it goes straight to making the clip.
+  **Context:** when you open a moment, the tool reads the 8 minutes before it (with the AI on). It fills in a
+  **context line** that's shown for the first few seconds of the clip, so strangers get what's going on, and a
+  **background** sentence that opens the YouTube and Instagram text. It also moves the start back to where the
+  setup begins (Undo puts it back). You can edit all of it; −30 s / +30 s buttons help with the times. The
+  caption editor can change the hook and context line of a finished clip too.
 - **Clips:** every clip with its YouTube title, YouTube description and Instagram caption (edit, then Copy), the
   before-posting checklist, and, once posted, the links and views that go into `log.csv`.
   - **Edit captions** fixes misheard words in the video's captions and re-makes the clip (about 30 s).

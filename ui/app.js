@@ -65,6 +65,7 @@ const S = {
   tab: 'find', status: null, streamers: [], streams: [], stream: null, editor: null,
   clips: [], clipFilter: 'all', dirtyClips: new Set(), jobs: [], jobsOpen: false, openJobs: new Set(),
   findJob: null, jobInfo: {}, dismissed: new Set(), addPrefill: null, flash: null, aiJobs: {}, liveSeen: {},
+  ctxCache: {},
 };
 let player = null;
 let CAM = null;
@@ -166,6 +167,8 @@ const ACTS = {
   'seek': (el) => { if (player) { player.seek(+el.dataset.t); player.play(); } },
   'layout': (el) => { if (!S.editor || el.disabled) return; S.editor.layout = el.dataset.v; refreshLayout(); },
   'make': () => makeClip(false),
+  'ctx-fetch': () => fetchContext(),
+  'ctx-undo-start': () => { const E = S.editor; if (E && E.prevStart != null) setTime('start', E.prevStart, true); },
   'make-again': () => makeClip(true),
   'goto-clips': () => showTab('clips'),
   'goto-streamer': (el) => gotoStreamer(el.dataset.name),
@@ -236,6 +239,8 @@ function onInput(e) {
   const t = e.target;
   const E = S.editor;
   if (E && t.id === 'ed-hook') E.hook = t.value;
+  if (E && t.id === 'ed-ctx') { E.context = t.value; E.contextTouched = true; }
+  if (E && t.id === 'ed-bg') { E.background = t.value; E.bgTouched = true; }
   if (E && t.id === 'ed-title') E.title = t.value;
   if (t.matches('.clip textarea')) {
     const card = t.closest('.clip'); S.dirtyClips.add(card.dataset.file);
@@ -421,11 +426,17 @@ function openMoment(n) {
     // without AI ranking, a moment's "title" is just its first spoken line: leave the title to the AI instead
     start: m.start, end: m.end, hook: m.hook || '', title: st.ai ? (m.title || '') : '', keepSilence: false, practice: false,
     said: m.said || [], spoiler: !!m.spoiler, jobId: j ? j.id : null, heading: m.title || `Moment at ${fmt(m.start)}`,
+    ...freshContext(),
   };
   setEditorStreamer(st.streamer);
   renderEditor();
   $$('.mcard').forEach((c) => c.classList.toggle('active', +c.dataset.n === n));
+  autoContext();
 }
+
+// context: what happened before the moment (context line, setup start, background for the post text)
+const freshContext = () => ({ context: '', background: '', ctxJobId: null, ctxState: 'idle', ctxNote: '', selfContained: null,
+  startTouched: false, contextTouched: false, bgTouched: false, prevStart: null });
 
 function openClipEditor(info) {
   S.stream = null;
@@ -433,10 +444,12 @@ function openClipEditor(info) {
     mode: 'clip', key: info.key, n: null, ref: info.key, src: { kind: info.kind, id: info.id, url: info.url }, link: info.link || info.url,
     start: null, end: null, hook: '', title: '', keepSilence: false, practice: false, said: [], spoiler: false,
     jobId: (makeJobFor(info.key) || {}).id || null, heading: 'Make a vertical clip from this clip',
+    ...freshContext(),
   };
   setEditorStreamer(info.streamer || '');
   if (S.tab !== 'find') showTab('find');
   renderStreams(); renderMoments(); renderEditor();
+  autoContext();
 }
 
 function closeEditor(rerender = true) {
@@ -476,9 +489,11 @@ function renderEditorBody() {
     <div class="times">
       <div class="tbox"><label for="ed-start">Start</label>
         <div class="tline"><button class="nudge" data-act="nudge" data-w="start" data-d="-1" title="1 second earlier">−1</button><input id="ed-start" class="tinput" value="${fmt(E.start)}"><button class="nudge" data-act="nudge" data-w="start" data-d="1" title="1 second later">+1</button></div>
+        <div class="tline2"><button class="nudge wide" data-act="nudge" data-w="start" data-d="-30" title="Start 30 seconds earlier">−30 s</button><button class="nudge wide" data-act="nudge" data-w="start" data-d="-10" title="Start 10 seconds earlier">−10 s</button></div>
         <button class="btn small ghost" data-act="from-player" data-w="start">Start = video’s time now</button></div>
       <div class="tbox"><label for="ed-end">End</label>
         <div class="tline"><button class="nudge" data-act="nudge" data-w="end" data-d="-1" title="1 second earlier">−1</button><input id="ed-end" class="tinput" value="${fmt(E.end)}"><button class="nudge" data-act="nudge" data-w="end" data-d="1" title="1 second later">+1</button></div>
+        <div class="tline2"><button class="nudge wide" data-act="nudge" data-w="end" data-d="10" title="End 10 seconds later">+10 s</button><button class="nudge wide" data-act="nudge" data-w="end" data-d="30" title="End 30 seconds later">+30 s</button></div>
         <button class="btn small ghost" data-act="from-player" data-w="end">End = video’s time now</button></div>
       <div class="tdur"><span class="len" id="ed-len"></span><span class="faint small" id="ed-len-hint"></span><span class="spacer"></span><button class="btn small" data-act="play-range">▶ Play this part</button></div>
     </div>` : '<p class="muted small">The whole clip is used. Pauses longer than 0.8 s are cut unless you tick “Keep pauses”.</p>'}
@@ -487,6 +502,11 @@ function renderEditorBody() {
       <span class="small muted">Not in the list? <button class="link" data-act="add-streamer-from" data-name="${esc(E.known ? '' : E.streamer)}">Add a streamer</button></span></div>` : ''}
     <div class="field"><label for="ed-hook">Hook <span class="faint">(big line at the top for the whole clip; up to ~8 words)</span></label>
       <input id="ed-hook" maxlength="80" value="${esc(E.hook)}" placeholder="e.g. Kai finally beat GTA 5"></div>
+    <div class="field"><label for="ed-ctx">Context line <span class="faint">(shown for the first few seconds, so strangers get what’s going on)</span></label>
+      <input id="ed-ctx" maxlength="90" value="${esc(E.context)}" placeholder="e.g. He’s been stuck on this heist for 3 hours">
+      <div class="ctx-status" id="ctx-status"></div></div>
+    <div class="field"><label for="ed-bg">Background <span class="faint">(goes into the YouTube and Instagram text)</span></label>
+      <textarea id="ed-bg" rows="2" maxlength="600" placeholder="What led up to this moment">${esc(E.background)}</textarea></div>
     <div class="field"><label for="ed-title">YouTube title <span class="faint">(optional; you can change it later)</span></label>
       <input id="ed-title" maxlength="150" value="${esc(E.title)}" placeholder="${S.status && S.status.ai.on ? 'Leave empty and the AI writes it, with the descriptions' : 'Leave empty to use the moment’s first line'}"></div>
     <div class="field-row">
@@ -504,7 +524,7 @@ function renderEditorBody() {
     <div class="ed-actions"><button class="btn primary big" data-act="make" id="make-btn">Make clip</button></div>
     <div id="ed-job"></div>
     ${E.mode === 'moment' ? transcriptBlock() : ''}`;
-  refreshTimes(); refreshLayout(); renderEditorJob(true);
+  refreshTimes(); refreshLayout(); renderEditorJob(true); renderCtxStatus(true);
 }
 
 function practiceBlock(sm) {
@@ -520,14 +540,82 @@ function practiceBlock(sm) {
 function transcriptBlock() {
   const E = S.editor;
   const rows = E.said.map(([t, x]) => `<button class="tr-line" data-act="seek" data-t="${t}"><span class="tr-t">${fmt(t)}</span><span>${esc(x)}</span></button>`).join('');
-  return `<div class="transcript"><div class="tr-head">What’s said around here <span class="faint small">(click a line to jump the video there)</span></div>
+  const before = E.said.length && E.said[0][0] < (E.start || 0) - 90;
+  return `<div class="transcript" id="ed-transcript"><div class="tr-head">${before ? 'What was said before and during this moment' : 'What’s said around here'}
+    <span class="faint small">(click a line to jump the video there)</span></div>
     ${rows || '<p class="muted small">No transcript for this moment.</p>'}</div>`;
 }
 
-function setTime(which, v) {
+function setTime(which, v, byUser = true) {
   const E = S.editor; if (!E || Number.isNaN(v)) return;
   E[which] = Math.max(0, Math.round(v));
+  if (byUser && which === 'start') { E.startTouched = true; E.prevStart = null; renderCtxStatus(true); }
   refreshTimes();
+}
+
+// ── context: read the minutes before the moment ──
+function autoContext() {
+  const E = S.editor; if (!E) return;
+  if (S.ctxCache[E.ref]) { applyContext(S.ctxCache[E.ref]); return; }
+  if (S.status && S.status.ai && S.status.ai.on) fetchContext();
+}
+
+async function fetchContext() {
+  const E = S.editor; if (!E) return;
+  // a context job still running for a moment you left isn't needed any more
+  for (const j of S.jobs) {
+    if (j.kind === 'context' && ACTIVE.has(j.status) && j.meta.ref !== E.ref) api(`/api/jobs/${j.id}/stop`, {}).catch(() => {});
+  }
+  E.ctxState = 'busy'; E.ctxNote = ''; renderCtxStatus(true);
+  try {
+    const job = await api('/api/context', {
+      link: E.link, start: E.mode === 'moment' ? E.start : 0, end: E.mode === 'moment' ? E.end : 0,
+      streamer: E.streamer, hook: (E.hook || '').trim(), ref: E.ref,
+    });
+    E.ctxJobId = job.id; upsertJob(job); pollSoon();
+  } catch (e) { E.ctxState = 'error'; E.ctxNote = e.message; renderCtxStatus(true); }
+}
+
+function setVal(sel, v) { const el = $(sel); if (el && document.activeElement !== el) el.value = v; }
+
+function applyContext(r) {
+  const E = S.editor; if (!E || !r) return;
+  S.ctxCache[E.ref] = r;
+  E.ctxState = 'done'; E.ctxNote = r.note || ''; E.selfContained = r.self_contained;
+  if (r.context_line && !E.contextTouched) { E.context = r.context_line; setVal('#ed-ctx', E.context); }
+  if (r.background && !E.bgTouched) { E.background = r.background; setVal('#ed-bg', E.background); }
+  if (E.mode === 'moment' && r.setup_start != null && !E.startTouched && r.setup_start < E.start - 0.5) {
+    E.prevStart = E.start;  // so "Undo" can put it back
+    setTime('start', r.setup_start, false);
+  }
+  if (E.mode === 'moment' && r.said && r.said.length) {
+    E.said = r.said;
+    const t = $('#ed-transcript'); if (t) { t.outerHTML = transcriptBlock(); refreshTimes(); }
+  }
+  renderCtxStatus(true);
+}
+
+function renderCtxStatus(force = false) {
+  const el = $('#ctx-status'); const E = S.editor; if (!el || !E) return;
+  const j = E.ctxJobId && jobById(E.ctxJobId);
+  if (!changed(el, `${E.ctxState}|${jobSig(j)}|${E.prevStart}|${E.ctxNote}`) && !force) return;
+  const ai = S.status && S.status.ai;
+  if (E.ctxState === 'busy') {
+    const last = j && j.lines.length ? j.lines[j.lines.length - 1].replace(/^•\s*/, '') : 'Starting…';
+    el.innerHTML = `<div class="spinner"></div><span>Reading the minutes before this moment… <span class="faint">${esc(last)}</span></span>`;
+    return;
+  }
+  const bits = [];
+  if (E.prevStart != null) {
+    bits.push(`Start moved back to <b>${fmt(E.start)}</b> so the setup is in. <button class="link" data-act="ctx-undo-start">Undo</button>`);
+  }
+  if (E.selfContained) bits.push(`<span class="faint">Makes sense on its own: ${E.selfContained}/10</span>`);
+  if (E.ctxNote) bits.push(`<span class="faint">${esc(E.ctxNote)}</span>`);
+  if (E.ctxState === 'error') bits.push(`<span class="bad-text">Couldn’t get the context.</span>`);
+  const label = E.ctxState === 'idle' ? '✨ Get context' : '↻ Again';
+  const offNote = E.ctxState === 'idle' && ai && !ai.on
+    ? `<span class="faint">${ai.paused ? 'AI is paused' : 'AI is off'}: you’ll get what was said before, but no context line.</span>` : '';
+  el.innerHTML = `${bits.join(' · ')} ${offNote} <button class="btn small ghost" data-act="ctx-fetch">${label}</button>`;
 }
 
 function refreshTimes() {
@@ -572,6 +660,7 @@ async function makeClip(again) {
     const job = await api('/api/make', {
       link: E.link, start: E.mode === 'moment' ? E.start : null, end: E.mode === 'moment' ? E.end : null,
       streamer: E.streamer, hook: (E.hook || '').trim(), title: (E.title || '').trim(), layout: E.layout,
+      context: (E.context || '').trim(), background: (E.background || '').trim(),
       keep_silence: E.keepSilence, practice: !E.permissionOk || E.practice, again, ref: E.ref,
     });
     E.jobId = job.id; upsertJob(job);
@@ -1178,6 +1267,10 @@ function capPrepared(j) {
 function renderCapBody() {
   const d = CAP.data;
   $('#cap-body').innerHTML = `
+    <div class="cap-texts">
+      <label>Hook <span class="faint">(top, whole clip)</span><input id="cap-hook" maxlength="80" value="${esc(d.hook || '')}" placeholder="No hook"></label>
+      <label>Context line <span class="faint">(first few seconds)</span><input id="cap-ctx" maxlength="90" value="${esc(d.context || '')}" placeholder="No context line"></label>
+    </div>
     <div class="cap-replace">
       <input id="rep-from" placeholder="Find, e.g. cold warmer" aria-label="Find">
       <span class="faint">→</span>
@@ -1258,9 +1351,15 @@ async function capRemake(reset) {
   if (!CAP || !CAP.data || !CAP.data.ready) return;
   const edits = {};
   if (!reset) $$('.cap-in').forEach((inp) => { if (inp.value.trim() !== CAP.orig[inp.dataset.i]) edits[inp.dataset.i] = inp.value.trim(); });
-  if (!reset && !Object.keys(edits).length && !CAP.replace.length) { toast('Nothing changed yet.', 'info'); return; }
+  const body = { file: CAP.file, edits, replace: CAP.replace, reset };
+  const hk = ($('#cap-hook') || {}).value, cx = ($('#cap-ctx') || {}).value;
+  if (hk !== undefined && hk.trim() !== (CAP.data.hook || '')) body.hook = hk.trim();
+  if (cx !== undefined && cx.trim() !== (CAP.data.context || '')) body.context = cx.trim();
+  if (!reset && !Object.keys(edits).length && !CAP.replace.length && body.hook === undefined && body.context === undefined) {
+    toast('Nothing changed yet.', 'info'); return;
+  }
   try {
-    const job = await api('/api/clip/recaption', { file: CAP.file, edits, replace: CAP.replace, reset });
+    const job = await api('/api/clip/recaption', body);
     CAP.jobId = job.id; upsertJob(job); capBusy(true); pollSoon();
   } catch (e) { toast(e.message, 'bad', 7000); }
 }
@@ -1328,6 +1427,14 @@ function onJobEnd(j) {
   if (j.kind === 'frame') camFrameReady(j);
   if (j.kind === 'record') { if (S.tab === 'streamers') renderStreamers(); }
   if (j.kind === 'posttext') clipAiDone(j);
+  if (j.kind === 'context') {
+    const E = S.editor;
+    if (E && E.ctxJobId === j.id) {
+      if (j.status === 'done') applyContext(j.result);
+      else { E.ctxState = j.status === 'stopped' ? 'idle' : 'error'; E.ctxNote = j.status === 'failed' ? j.error : ''; renderCtxStatus(true); }
+    }
+    loadStatus();  // the AI may have paused or come back
+  }
   if (j.kind === 'captions' && CAP && CAP.prepJob === j.id) capPrepared(j);
   if (j.kind === 'recaption') {
     if (CAP && CAP.jobId === j.id) capRemade(j);
@@ -1408,6 +1515,7 @@ function renderAllJobs() {
   watchLive();
   if (S.tab === 'find') { renderFindJobs(); renderLiveJobs(); }
   renderEditorJob();
+  renderCtxStatus();
   renderCapJob();
   renderBrandApply();
 }

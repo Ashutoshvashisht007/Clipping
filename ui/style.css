@@ -349,6 +349,16 @@ details.box > .inner { padding: 4px 10px 10px; display: grid; gap: 8px; }
 .cap-in:disabled { opacity: .6; }
 .cap-foot { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
 
+/* ── context ── */
+.tline2 { display: flex; gap: 4px; }
+.nudge.wide { flex: 1; height: 26px; font-size: 11.5px; color: var(--muted); }
+.ctx-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12.5px; color: var(--muted); min-height: 28px; }
+.ctx-status b { color: var(--text); }
+.bad-text { color: var(--bad); }
+.cap-texts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cap-texts label { display: grid; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.cap-texts input { width: 100%; }
+
 /* ── live mode ── */
 .live-dot { width: 9px; height: 9px; border-radius: 50%; background: #ff3b3b; display: inline-block; flex: none; animation: pulse 1.4s infinite; }
 .badge.live { background: rgba(255, 59, 59, .16); color: #ff6b6b; }

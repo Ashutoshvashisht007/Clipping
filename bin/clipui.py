@@ -111,7 +111,8 @@ class Job:
 
 JOBS: dict[str, Job] = {}
 JOBS_LOCK = threading.Lock()
-LANES = {"find": queue.Queue(), "make": queue.Queue()}  # one at a time per lane, so the Mac isn't swamped
+# one at a time per lane, so the Mac isn't swamped; context has its own so it never waits behind a clip
+LANES = {"find": queue.Queue(), "make": queue.Queue(), "context": queue.Queue()}
 
 
 def pump(job: Job) -> None:
@@ -652,6 +653,12 @@ def act_make(b: dict) -> dict:
     title = re.sub(r"\s+", " ", need_str(b, "title", 200, required=False))
     if hook:
         args.append(f"--hook={hook}")
+    context = re.sub(r"\s+", " ", need_str(b, "context", 120, required=False))
+    background = re.sub(r"\s+", " ", need_str(b, "background", 800, required=False))
+    if context:
+        args.append(f"--context={context}")
+    if background:
+        args.append(f"--background={background}")
     if title:
         args.append(f"--title={title}")
     layout = need_str(b, "layout", 20, required=False)
@@ -754,6 +761,24 @@ def act_record(b: dict) -> dict:
                       {"streamer": name})).view()
 
 
+def act_context(b: dict) -> dict:
+    """Read the minutes before a moment: a context line, where the setup starts, background for the post text."""
+    src = source(need_str(b, "link"))
+    start = time_arg(b.get("start") if b.get("start") is not None else 0, "start")
+    end = time_arg(b.get("end") if b.get("end") is not None else 0, "end")
+    ref = need_str(b, "ref", 200, required=False)
+    if j := active("context", ref=ref):
+        return j.view()
+    args = ["context", source_arg(src), str(int(start)), str(int(end))]
+    name = need_str(b, "streamer", 60, required=False).lower()
+    if name:
+        args += ["--streamer", name]
+    hook = re.sub(r"\s+", " ", need_str(b, "hook", 120, required=False))
+    if hook:
+        args.append(f"--hook={hook}")
+    return submit(Job("context", f"Context · {ck.fmt_time(start)}", args, "context", {"ref": ref, "key": src["key"]})).view()
+
+
 def act_live(b: dict) -> dict:
     name = need_str(b, "name", 60).lower()
     s = ck.load_streamers().get(name)
@@ -811,7 +836,8 @@ def captions_view(relpath: str) -> dict:
     name = str(meta.get("streamer", ""))
     s = ck.load_streamers().get(name) or {}
     out = {"file": rel(mp4), "url": file_url(mp4), "streamer": name, "display": s.get("display", meta.get("display", name)),
-           "rules": fix_rules(name), "edited": bool(meta.get("captions_edited")), "ready": bool(meta.get("words"))}
+           "rules": fix_rules(name), "edited": bool(meta.get("captions_edited")), "ready": bool(meta.get("words")),
+           "hook": meta.get("hook", ""), "context": meta.get("context", "")}
     if out["ready"]:
         cfg = ck.load_config()
         _, _, lines = ck.caption_lines(meta["words"], meta.get("keep") or [[0.0, 1e9]], cfg["captions"])
@@ -832,6 +858,10 @@ def act_recaption(b: dict) -> dict:
     if j := active("recaption", file=rel(mp4)):
         return j.view()
     args = ["recaption", str(mp4)]
+    for k in ("hook", "context"):  # changed in the caption editor ("" takes it off)
+        if b.get(k) is not None:
+            v = re.sub(r"\s+", " ", need_str(b, k, 120, required=False))
+            args.append(f"--{k}={v}")
     if b.get("reset"):
         args.append("--reset")
     else:
@@ -1041,7 +1071,7 @@ POST_ROUTES = {
     "/api/clip/prepare": act_prepare, "/api/clip/recaption": act_recaption, "/api/clip/posttext": act_posttext,
     "/api/fixes": act_fix_add, "/api/fixes/remove": act_fix_remove, "/api/ai/resume": act_ai_resume,
     "/api/brand": act_brand, "/api/brand/logo": act_brand_logo, "/api/brand/apply": act_brand_apply,
-    "/api/live": act_live,
+    "/api/live": act_live, "/api/context": act_context,
 }
 
 

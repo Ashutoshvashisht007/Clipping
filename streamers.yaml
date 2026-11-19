@@ -67,3 +67,42 @@ streamers:
       platforms: [youtube_shorts, instagram_reels]
       monetize: false
       checked_on: ""
+
+  - name: rachitroo
+    display: "Rachitroo"
+    channel: "https://www.youtube.com/@theRachitroo"
+    youtube: "@theRachitroo"
+    credit: "@rachitroo"
+    language: en
+    permission:
+      source: none
+      proof: ""
+      platforms: [youtube_shorts, instagram_reels]
+      monetize: false
+      checked_on: ""
+
+  - name: carryminati
+    display: "carryminati"
+    channel: "https://www.twitch.tv/carryminati"
+    youtube: "@CarryisLive"
+    credit: "@carryminati"
+    language: en
+    permission:
+      source: none
+      proof: ""
+      platforms: [youtube_shorts, instagram_reels]
+      monetize: false
+      checked_on: ""
+
+  - name: mythpat
+    display: "Mythpat"
+    channel: "https://www.youtube.com/@Mythpat"
+    youtube: "@MythPat"
+    credit: "@mythpat"
+    language: en
+    permission:
+      source: none
+      proof: ""
+      platforms: [youtube_shorts, instagram_reels]
+      monetize: false
+      checked_on: ""

@@ -1329,8 +1329,16 @@ def save_fixes(d: dict) -> None:
     tmp.replace(FIXES)
 
 
+# emoji and symbols the caption fonts don't have (they'd show as empty boxes on the video)
+NO_GLYPH = re.compile("[\U00010000-\U0010FFFF☀-➿⬀-⯿️‍⃣]")
+
+
+def ass_text(s: str | None) -> str:
+    return re.sub(r"\s+", " ", NO_GLYPH.sub("", re.sub(r"[{}\\]", "", s or ""))).strip()
+
+
 def build_ass(words: list[dict], ccfg: dict, total: float, cap_y: float, hook: str | None, hook_y: float,
-              groups_pos: list[list[int]] | None = None) -> str:
+              groups_pos: list[list[int]] | None = None, context: str | None = None) -> str:
     white, hi = ass_color(ccfg["color"]), ass_color(ccfg["highlight"])
     font, size = ccfg["font"], int(ccfg["size"])
     if groups_pos is None:
@@ -1346,12 +1354,18 @@ def build_ass(words: list[dict], ccfg: dict, total: float, cap_y: float, hook: s
         "MarginR, MarginV, Encoding",
         f"Style: Cap,{font},{size},{white},{white},&H00000000,&H90000000,0,0,0,0,100,100,0,0,1,7,3,5,60,60,0,1",
         f"Style: Hook,{font},60,&H00000000,&H00000000,&H00FFFFFF,&H00000000,0,0,0,0,100,100,0,0,3,16,0,5,90,90,0,1",
+        # context line: white on a see-through dark box, top-aligned so a second line grows downwards
+        "Style: Ctx,Arial,46,&H00FFFFFF,&H00FFFFFF,&H64000000,&H00000000,-1,0,0,0,100,100,0,0,3,14,0,8,90,90,0,1",
         "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     ev = []
-    if hook:
-        h = re.sub(r"[{}\\]", "", hook).strip()
+    h, c = ass_text(hook), ass_text(context)
+    if h:
         ev.append(f"Dialogue: 1,{ass_time(0)},{ass_time(total)},Hook,,0,0,0,,{{\\pos(540,{int(hook_y)})}}{h}")
+    if c:  # the first few seconds: long enough to read it
+        shown = min(total, max(2.5, min(5.0, 1.4 + 0.32 * len(c.split()))))
+        y = hook_y + 60 if h else hook_y - 37
+        ev.append(f"Dialogue: 2,{ass_time(0)},{ass_time(shown)},Ctx,,0,0,0,,{{\\pos(540,{int(y)})\\fad(150,350)}}{c}")
     pos = f"\\pos(540,{int(cap_y)})"
     for gi, g in enumerate(groups):
         g_end = g[-1]["end"] + 0.2
@@ -1684,16 +1698,16 @@ def clip_txt(meta: dict) -> str:
 # ───────────────────────────── post text (AI) ─────────────────────────────
 
 POST_PROMPT = """You write the post text for a short vertical clip of a livestreamer. It goes on an English YouTube Shorts and Instagram Reels page that reposts streamer clips, with credit, to grow an audience.
-You get the streamer, the stream's title, the hook line shown on screen, and what is said in the clip. That comes from speech-to-text, so names may be misheard: use the right spelling (for example, in a football clip "cold warmer" is "Cole Palmer").
+You get the streamer, the stream's title, the hook line shown on screen, sometimes what happened before the clip, and what is said in the clip. That comes from speech-to-text, so names may be misheard: use the right spelling (for example, in a football clip "cold warmer" is "Cole Palmer").
 
 Write:
 - yt_title: a YouTube Shorts title of at most 70 characters that makes a stranger want to watch. True to the clip. No hashtags, at most one emoji.
-- yt_text: one or two sentences for the YouTube description, saying what happens.
-- ig_text: the start of an Instagram caption: one or two short, punchy lines; may end with one emoji. No hashtags.
+- yt_text: one or two sentences for the YouTube description. If you were told what happened before, start with the background a stranger needs, then say what happens.
+- ig_text: the start of an Instagram caption: one or two short, punchy lines that set up the moment for someone who has never seen this streamer; may end with one emoji. No hashtags.
 - hashtags: 5 to 8 hashtags that fit this clip (the streamer, the game or sport, people or teams in it, the topic), most specific first. No generic ones like #fyp or #viral.
 - spoiler: true if the clip shows or reveals GTA 6 story events, missions or cutscenes.
 
-Never invent things that aren't in the clip. Don't add credit lines or links; those are added for you.
+Never invent things that aren't in the clip. Call the streamer by name rather than guessing "he" or "she". Don't add credit lines or links; those are added for you.
 Reply with JSON only:
 {"yt_title":"...","yt_text":"...","ig_text":"...","hashtags":["#..."],"spoiler":false}"""
 
@@ -1723,13 +1737,14 @@ def clean_tags(v) -> list[str]:
 
 
 def ai_post_text(cfg: dict, *, display: str, credit: str, stream_title: str, hook: str | None,
-                 said: list[tuple[float, str]]) -> dict:
+                 said: list[tuple[float, str]], background: str = "") -> dict:
     """YouTube title + description text, Instagram caption text and hashtags, written by the AI."""
     if not said:
         raise ClipError("nobody talks in this clip, so the AI has nothing to go on")
     body = "\n".join(f"[{fmt_time(t)}] {x}" for t, x in said)[:6000]
+    before = f"What happened before this clip: {background.strip()}\n" if background and background.strip() else ""
     user = (f"Streamer: {display}{f' ({credit})' if credit else ''}\nStream title: {stream_title or '-'}\n"
-            f"On-screen hook: {hook or '-'}\n\nWhat's said in the clip:\n{body}")
+            f"On-screen hook: {hook or '-'}\n{before}\nWhat's said in the clip:\n{body}")
     resp = ai_request(cfg, [{"role": "system", "content": POST_PROMPT}, {"role": "user", "content": user}],
                       max_tokens=2000, timeout=90)
     content = ((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
@@ -1829,14 +1844,14 @@ def silence_keep(cfg: dict, raw: Path, dur: float, keep_silence: bool) -> list:
 
 
 def render_clip(cfg: dict, work: Path, raw: Path, mi: dict, keep, words: list[dict], lay: dict,
-                hook: str | None, out: Path) -> float:
+                hook: str | None, out: Path, context: str | None = None) -> float:
     """Captions + layout → the finished 1080×1920 file. Written beside it first, then swapped in."""
     dur = mi["duration"] or sum(b - a for a, b in keep)
     total = sum(b - a for a, b in keep)
     lay_f, pos = layout_filter(lay, mi["w"], mi["h"])
     mapped, groups, _ = caption_lines(words, keep, cfg["captions"])
     (work / "captions.ass").write_text(build_ass([w for _, w in mapped], cfg["captions"], total, pos["cap_y"], hook,
-                                                 pos["hook_y"], groups))
+                                                 pos["hook_y"], groups, context=context))
     tmp = out.with_name(out.stem + ".making.mp4")
     step("Rendering the vertical clip...")
     render(work, raw, keep, lay_f, "captions.ass", tmp, mi["fps"], dur, brand=current_brand())
@@ -1898,14 +1913,20 @@ def cmd_recaption(a) -> None:
         words = meta.get("heard") or clip_words(cfg, mp4, meta)
     else:
         words = clip_words(cfg, mp4, meta)
+    if a.hook is not None:  # changed in the caption editor ("" takes it off)
+        meta["hook"] = a.hook.strip()
+    if a.context is not None:
+        meta["context"] = a.context.strip()
     _, work, raw, mi, keep = clip_setup(cfg, meta)
     lay = load_layout(meta.get("streamer", ""))
     mode = meta.get("layout") or lay.get("mode", "full")
     lay = {**lay, "mode": mode if (mode != "camera_top" or lay.get("cam")) else "full"}
-    total = render_clip(cfg, work, raw, mi, keep, words, lay, meta.get("hook") or None, mp4)
+    total = render_clip(cfg, work, raw, mi, keep, words, lay, meta.get("hook") or None, mp4,
+                        context=meta.get("context") or None)
     meta.update(words=words, keep=keep, seconds=round(total, 1), captions_edited=not a.reset,
                 brand=(current_brand() or {}).get("id", ""))
     mp4.with_suffix(".json").write_text(json.dumps(meta, indent=1, ensure_ascii=False))
+    mp4.with_suffix(".txt").write_text(clip_txt(meta))  # the hook line in the checklist may have changed
     say(f"✓ {mp4.name} re-made with your captions ({total:.0f} s)")
     report(file=meta["file"], meta=meta)
 
@@ -1921,7 +1942,7 @@ def cmd_posttext(a) -> None:
     stream = load_state()["streams"].get(meta.get("source_key", "")) or {}
     step("Writing the YouTube and Instagram text with AI...")
     ai = ai_post_text(cfg, display=display, credit=credit, stream_title=stream.get("title", ""),
-                      hook=meta.get("hook") or None, said=said_lines(words))
+                      hook=meta.get("hook") or None, said=said_lines(words), background=meta.get("background", ""))
     fill_post(meta, cfg, display=display, credit=credit, title=ai["yt_title"] or meta.get("title", ""), ai=ai)
     meta["credit"] = credit
     mp4.with_suffix(".txt").write_text(clip_txt(meta))
@@ -1929,6 +1950,143 @@ def cmd_posttext(a) -> None:
     set_log_title(meta["file"], meta["title"])
     say(f"✓ New text for {mp4.name}: {meta['title']}")
     report(file=meta["file"], meta=meta)
+
+
+# ───────────────────────────── context: what happened before a moment ─────────────────────────────
+
+CONTEXT_PROMPT = """You help turn a moment from a livestream into a short vertical clip that strangers understand without having watched the stream.
+You get the streamer, the stream's title, the clip's on-screen hook, and a transcript (speech-to-text, so names may be misheard) of the minutes before the clip and of the clip itself. The lines "=== CLIP STARTS ===" and "=== CLIP ENDS ===" mark where the clip is now.
+
+Decide:
+- setup_start: "H:MM:SS", where the setup of this moment begins, so the clip makes sense on its own. It must be between {lo} and {hi}. If the setup is already inside the clip, give the current start, {cur}.
+- context_line: at most 12 words, shown on screen for the first seconds of the clip, telling a stranger what is going on (for example "Kai has been stuck on this heist for 3 hours"). Present tense, plain words, no emojis, no hashtags, don't repeat the hook, and only facts from the transcript. Call the streamer by name rather than guessing "he" or "she". Use "" if the clip needs no explaining.
+- background: one or two sentences for the post caption about what led up to this moment. Use "" if there's nothing useful.
+- self_contained: 1-10, how well the clip works for someone who has never seen this streamer.
+
+Reply with JSON only:
+{{"setup_start":"H:MM:SS","context_line":"...","background":"...","self_contained":7}}"""
+
+
+def lookback_audio(src: dict, work: Path, a0: float, b0: float) -> tuple[Path, float]:
+    """16 kHz mono audio of a0..b0 of the stream, and the stream time it starts at."""
+    wav = work / f"lookback-{int(a0)}-{int(b0)}.wav"
+
+    def to_wav(path: Path, ss: float | None, dur: float | None) -> None:
+        cut = (["-ss", f"{ss:.2f}"] if ss is not None else []) + (["-t", f"{dur:.2f}"] if dur is not None else [])
+        run([FFMPEG, "-v", "error", "-y", *cut, "-i", path, "-vn", "-ac", "1", "-ar", "16000", wav])
+
+    kind = src["kind"]
+    if kind == "file":
+        to_wav(Path(src["path"]), a0, b0 - a0)
+        return wav, a0
+    if kind in ("twitch-clip", "kick-clip"):  # a single clip: there's nothing before it, so use all of it
+        to_wav(fetch_audio(src, work, None), None, None)
+        return wav, 0.0
+    if kind == "youtube":  # finding moments downloaded the whole audio: cut from that
+        have = [p for p in sorted(work.glob("audio.*")) if ".part" not in p.name and not p.name.endswith(".ytdl")]
+        if have:
+            to_wav(have[0], a0, b0 - a0)
+            return wav, a0
+        piece = fetch_audio(src, work, (a0, b0))
+        to_wav(piece, None, None)
+        piece.unlink(missing_ok=True)
+        return wav, a0
+    # Twitch / Kick: fetch just the pieces needed, several at once
+    info = probe(src, "ba/worst")
+    piece = work / f"lookback-{int(a0)}-{int(b0)}.ts"
+    try:
+        t0 = hls_window(info["_input"][0], a0, b0, piece)
+        to_wav(piece, max(0.0, a0 - t0), b0 - a0)
+    finally:
+        piece.unlink(missing_ok=True)
+    return wav, a0
+
+
+def cmd_context(a) -> None:
+    """Context for a clip: what was said in the minutes before it, where its setup starts, a line that explains it."""
+    cfg = load_config()
+    src = source_of(a.link)
+    start, end = parse_time(a.start), parse_time(a.end)
+    back = max(60.0, float(a.back) * 60)
+    s_conf = load_streamers().get(str(a.streamer or "").lower()) or {}
+    display = s_conf.get("display") or a.streamer or "the streamer"
+    work = ROOT / "inbox" / src["key"]
+    work.mkdir(parents=True, exist_ok=True)
+    whole_clip = src["kind"] in ("twitch-clip", "kick-clip")
+    a0 = 0.0 if whole_clip else max(0.0, start - back)
+
+    said_file = work / f"said-{int(a0)}-{int(end)}.json"
+    if said_file.exists():
+        said = [tuple(x) for x in json.loads(said_file.read_text())]
+        step("Using what was said before, read earlier...")
+    else:
+        step(f"Getting the audio of the {fmt_time(start - a0)} before the moment..." if not whole_clip
+             else "Getting the clip's audio...")
+        wav, t0 = lookback_audio(src, work, a0, end)
+        step("Reading what was said (on your Mac)...")
+        words, _ = transcribe(cfg, wav)
+        wav.unlink(missing_ok=True)
+        words, _ = apply_rules(words, rules_for(str(s_conf.get("name", "")).lower()))
+        said = [(t0 + t, x) for t, x in said_lines(words)]
+        if whole_clip:
+            end = max([t for t, _ in said] + [end])
+        said_file.write_text(json.dumps(said, ensure_ascii=False))
+
+    out = {"start": start, "end": end, "said": [[t, x] for t, x in said], "ai": False, "setup_start": None,
+           "context_line": "", "background": "", "self_contained": None, "note": ""}
+    lo = max(a0, start - 180, end - 75)  # look up to 3 minutes back, and keep the clip at 75 s at most
+    hi = min(start + 5, end - 8)
+    lines, opened, closed = [], False, False
+    for t, x in said:
+        if not opened and t >= start:
+            lines.append("=== CLIP STARTS ===")
+            opened = True
+        if opened and not closed and t > end:
+            lines.append("=== CLIP ENDS ===")
+            closed = True
+        lines.append(f"[{fmt_time(t)}] {x}")
+    if not opened:
+        lines.append("=== CLIP STARTS ===")
+    if not closed:
+        lines.append("=== CLIP ENDS ===")
+    body = "\n".join(lines)
+    body = body[-9000:] if len(body) > 9000 else body  # very long: keep the part closest to the moment
+    stream = load_state()["streams"].get(src["key"]) or {}
+    user = (f"Streamer: {display}\nStream title: {stream.get('title', '') or '-'}\nOn-screen hook: {a.hook or '-'}\n"
+            f"Clip now: {fmt_time(start)}–{fmt_time(end)}\n\nTranscript:\n{body}")
+    prompt = CONTEXT_PROMPT.format(lo=fmt_time(lo), hi=fmt_time(max(lo, hi)), cur=fmt_time(start))
+    if not said:
+        out["note"] = "nobody talks around this moment, so there's no context to give"
+    else:
+        step("Working out the context with AI...")
+        try:
+            resp = ai_request(cfg, [{"role": "system", "content": prompt}, {"role": "user", "content": user}],
+                              max_tokens=1500, timeout=90)
+            d = parse_json_block(((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+            line = ass_text(re.sub(r"\s*#\w+", "", str(d.get("context_line") or ""))).strip('"')[:90]
+            out.update(ai=True, context_line=line,
+                       background=re.sub(r"\s+", " ", str(d.get("background") or "")).strip()[:600])
+            try:
+                ss = parse_time(d.get("setup_start"))
+                if not whole_clip and lo <= ss <= hi and ss < start - 0.5:
+                    out["setup_start"] = ss
+            except (ValueError, TypeError):
+                pass
+            try:
+                out["self_contained"] = max(1, min(10, int(d.get("self_contained"))))
+            except (TypeError, ValueError):
+                pass
+        except AISkip as e:
+            out["note"] = f"{e}, so there's no context line; the transcript now covers the minutes before"
+        except (ClipError, json.JSONDecodeError, ValueError, KeyError) as e:
+            out["note"] = f"the AI context didn't work ({e}); the transcript now covers the minutes before"
+    if out["context_line"]:
+        say(f"✓ Context line: {out['context_line']}")
+    if out["setup_start"] is not None:
+        say(f"✓ The setup starts at {fmt_time(out['setup_start'])}, {start - out['setup_start']:.0f} s before the clip")
+    if out["note"]:
+        say(f"    {out['note']}")
+    report(**out)
 
 
 def cmd_makeclip(a) -> None:
@@ -1991,13 +2149,15 @@ def cmd_makeclip(a) -> None:
         if a.layout == "camera_top" and not lay.get("cam"):
             raise ClipError(f"No camera box saved for {name}. Run: clip camera {name} <stream link> <time>")
     hook = a.hook.strip() if a.hook else None
+    context = ass_text(a.context) or None  # the line that sets the scene in the first seconds
+    background = re.sub(r"\s+", " ", a.background or "").strip()[:600]
 
     day = dt.date.today().isoformat()
     out_dir = ROOT / "out" / ("practice" if a.practice else day)
     out_dir.mkdir(parents=True, exist_ok=True)
     tag = slug(src["id"], 28) if src["kind"] in ("twitch-clip", "kick-clip") else fmt_dash(start)
     out = out_dir / f"{'PRACTICE-' if a.practice else ''}{name}-{tag}.mp4"
-    total = render_clip(cfg, work, raw, mi, keep, words, lay, hook, out)
+    total = render_clip(cfg, work, raw, mi, keep, words, lay, hook, out, context=context)
     forget_unbranded(out)
 
     moment = None
@@ -2011,7 +2171,7 @@ def cmd_makeclip(a) -> None:
         step("Writing the YouTube and Instagram text with AI...")
         try:
             ai = ai_post_text(cfg, display=display, credit=s_conf.get("credit", ""), hook=hook, said=said_lines(words),
-                              stream_title=(st["streams"].get(src["key"]) or {}).get("title", ""))
+                              stream_title=(st["streams"].get(src["key"]) or {}).get("title", ""), background=background)
         except AISkip as e:
             say(f"    skipped: {e}. Using the plain title and hashtags.")
         except (ClipError, json.JSONDecodeError, ValueError, KeyError, TypeError) as e:
@@ -2023,6 +2183,7 @@ def cmd_makeclip(a) -> None:
         "credit": s_conf.get("credit", ""), "source_url": src["url"], "source_key": src["key"],
         "source_kind": src["kind"], "stream_link": link_at(src, start), "start": start, "end": end,
         "seconds": round(total, 1), "practice": bool(a.practice), "hook": hook or "",
+        "context": context or "", "background": background,
         "permission": f"PERMISSION: {perm_src} · proof: {p.get('proof', '') or '-'} · platforms: "
                       f"{', '.join(p.get('platforms') or []) or '-'} · monetize: {'yes' if p.get('monetize') else 'no'}",
         "made_on": day, "layout": lay.get("mode", "full"), "keep_silence": bool(a.keep_silence),
@@ -2183,7 +2344,8 @@ def cmd_brand(a) -> None:
                         lay = load_layout(meta.get("streamer", ""))
                         mode = meta.get("layout") or lay.get("mode", "full")
                         lay = {**lay, "mode": mode if (mode != "camera_top" or lay.get("cam")) else "full"}
-                        render_clip(cfg, work, raw, mi, keep, words, lay, meta.get("hook") or None, mp4)
+                        render_clip(cfg, work, raw, mi, keep, words, lay, meta.get("hook") or None, mp4,
+                                    context=meta.get("context") or None)
                         remade = True
                     except ClipError as e:
                         warn(f"couldn't make it again from the stream ({e}); adding the logo on top instead")
@@ -2584,6 +2746,8 @@ def main(argv=None) -> int:
     m = sub.add_parser("makeclip", help="make a captioned vertical clip")
     m.add_argument("rest", nargs="+", metavar="ARGS", help="<link or file> [start end] <streamer>")
     m.add_argument("--hook")
+    m.add_argument("--context", help="a line shown for the first seconds that sets the scene")
+    m.add_argument("--background", help="what happened before, for the YouTube and Instagram text")
     m.add_argument("--title")
     m.add_argument("--layout", choices=["full", "camera_top"])
     m.add_argument("--keep-silence", action="store_true")
@@ -2605,6 +2769,15 @@ def main(argv=None) -> int:
     rc.add_argument("clip")
     rc.add_argument("--words", help="JSON file with the edited caption words")
     rc.add_argument("--reset", action="store_true", help="go back to the captions as they were heard")
+    rc.add_argument("--hook", help="a new hook line ('' to remove it)")
+    rc.add_argument("--context", help="a new context line ('' to remove it)")
+    cx = sub.add_parser("context", help="what happened before a moment, where its setup starts, a line to explain it")
+    cx.add_argument("link")
+    cx.add_argument("start")
+    cx.add_argument("end")
+    cx.add_argument("--streamer")
+    cx.add_argument("--hook")
+    cx.add_argument("--back", type=float, default=8, help="minutes before the moment to read (default 8)")
     pt = sub.add_parser("posttext", help="write a clip's YouTube and Instagram text with the AI")
     pt.add_argument("clip")
     br = sub.add_parser("brand", help="your logo on every clip: brand logo <picture> | brand preview | brand apply")
@@ -2625,7 +2798,7 @@ def main(argv=None) -> int:
     try:
         {"findmoments": cmd_findmoments, "makeclip": cmd_makeclip, "camera": cmd_camera, "frame": cmd_frame,
          "captions": cmd_captions, "recaption": cmd_recaption, "posttext": cmd_posttext, "brand": cmd_brand,
-         "live": cmd_live,
+         "live": cmd_live, "context": cmd_context,
          "record": cmd_record, "check": cmd_check}[a.cmd](a)
     except ClipError as e:
         say(f"✗ {e}")
