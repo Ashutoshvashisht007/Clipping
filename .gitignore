@@ -34,3 +34,48 @@ demo/node_modules/
 demo/work/
 demo/out/
 demo/music.*
+
+# session handover notes: never commit
+HANDOVER-*.md
+
+# Taste Skill kit (installed per project, not committed)
+.claude/
+.taste-skill/
+
+# site/ (the landing page): the safety copy of the full clip stays local; of Taste Skill's kit in site/assets only
+# the files the page loads are committed (plus its MIT licence and the icon credits)
+site/media/clip-full.mp4
+site/assets/**
+!site/assets/**/
+!site/assets/LICENSE-taste-skill.txt
+!site/assets/backgrounds/backgrounds.css
+!site/assets/backgrounds/backgrounds.js
+!site/assets/diagrams/diagram.css
+!site/assets/diagrams/diagram.js
+!site/assets/diagrams/mount.js
+!site/assets/effects/fx.js
+!site/assets/effects/grain-gradient/effect.js
+!site/assets/effects/painterly-landscape/effect.js
+!site/assets/icons/icon.css
+!site/assets/icons/icons-credits.json
+!site/assets/icons/twitch.svg
+!site/assets/icons/ui-activity.svg
+!site/assets/icons/ui-captions.svg
+!site/assets/icons/ui-scissors.svg
+!site/assets/icons/ui-smartphone.svg
+!site/assets/icons/ui-sparkles.svg
+!site/assets/layout/layout.css
+!site/assets/layout/layout.js
+!site/assets/moments/lib.js
+!site/assets/moments/marquee-row/moment.css
+!site/assets/moments/marquee-row/moment.js
+!site/assets/moments/moments.js
+!site/assets/motion/motion.css
+!site/assets/motion/motion.js
+!site/assets/system.css
+!site/assets/system.js
+!site/assets/ui/base.css
+!site/assets/ui/cards.css
+!site/assets/ui/ui.js
+!site/assets/ui/window/fragment.css
+!site/assets/ui/window/fragment.js

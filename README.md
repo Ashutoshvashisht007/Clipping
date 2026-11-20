@@ -39,7 +39,7 @@ posted on Instagram as [@hype_spice](https://www.instagram.com/hype_spice).
   (11 GB → 3 GB of memory), and transcriptions take turns across jobs so the Mac stays responsive.
 - **Twitch audio** is fetched as parallel 10-second pieces: 20 minutes in 30 s instead of 163 s. Chat comes from
   Twitch's public replay API.
-- **AI ranking and text:** a small model on OpenCode Go, about $0.001 per stream. When the AI is down, refuses the
+- **AI ranking and text:** a small model on OpenCode Go, under $0.003 per stream. When the AI is down, refuses the
   key or runs out of credit, it pauses itself (5 minutes to 12 hours, by cause) and the tool carries on without it.
 - **The page:** a small local web app (standard-library Python server plus plain JavaScript) that runs every step as
   its own job, with progress, stop and retry.
