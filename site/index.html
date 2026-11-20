@@ -270,6 +270,28 @@ button:is(.loop-pause, .ui-pause) { display: none !important; }
 @media (max-width: 1023px) { .close__row { flex-direction: column; align-items: stretch; } .close__row > .waitlist { flex: none; max-width: none; } .close__row > .link { align-self: flex-start; } }
 @media (max-width: 1023px) { .waitlist fieldset { grid-template-columns: minmax(0, 1fr); } .waitlist .btn { justify-self: start; } }
 @media (max-width: 639px) { .waitlist .btn { justify-self: stretch; } }
+
+/* ---- a phone: even spacing (the client's choice over the one-screen-per-section rule, which stays from 640 up).
+   Every section after the hero is as tall as what it holds, with the same space above and below it; the bento's
+   cards stand 40px apart, each panel one height; the marquee rests as one centred line of words ---- */
+@media (max-width: 639px) {
+  /* the hero window centred in its frame: 16px in on both sides */
+  .hero--centred .hero__window > .ly-piece.cw { width: calc(100% - 2 * var(--s-4)); left: var(--s-4); }
+  #demo, #how, #code, #contact { min-height: 0; height: auto; --padt: 72px; --padb: 72px; }
+  #contact { padding-block: 72px 48px; }
+  /* a .fill takes what a fixed-height screen leaves; here the section has no fixed height, so each block is
+     its own height */
+  #demo .wrap > .fill, #how .wrap > .fill, #code .wrap > .fill { flex: none; }
+  #code .grid.fill > .frame--fill { flex: none; min-height: 0; }
+  #how .bento, #how .bento > .grid { gap: 40px; }
+  /* the five cards simply stack: a plain column, each card the column's width */
+  #how .bento > .grid { flex: none; display: flex; flex-direction: column; }
+  #how .bento > .grid > .card { width: 100%; min-width: 0; }
+  #how .bento .panel, #how .group .panel, #how .wrap > .grid .panel { --p-h: 220px; }
+  .hero .hero__marquee.mo-mq .mo-mq__track { display: block; text-align: center; font-size: 14px; line-height: 1.6; }
+  .hero .hero__marquee.mo-mq .mo-mq__track > li { display: inline-block; margin: 0 var(--s-2); }
+  .hero .hero__marquee.mo-mq .mo-mq__track > li:nth-child(n+7) { display: none; }
+}
 </style>
 </head>
 <body>
@@ -527,7 +549,7 @@ button:is(.loop-pause, .ui-pause) { display: none !important; }
   </section>
 </main>
 
-<footer class="footer closing footer--dark ground-inverse g2m" id="contact" aria-labelledby="close-h">
+<footer class="footer closing footer--dark ground-inverse" id="contact" aria-labelledby="close-h">
   <div class="wrap">
     <div class="closing__cta close--type" id="waitlist">
       <div class="section-head">
