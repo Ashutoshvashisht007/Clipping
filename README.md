@@ -7,6 +7,8 @@ Mac, and has an AI rank the ones worth posting. Pick one and it makes a 1080×19
 hook line, a line of context for viewers who missed the stream, and your logo. It also writes the YouTube and
 Instagram text.
 
+**Website: [clipping-site-teal.vercel.app](https://clipping-site-teal.vercel.app/)**, with the waitlist.
+
 [![Watch the 3-minute demo](docs/demo-poster.png)](docs/clipping-demo.mp4)
 
 **[▶ Watch the 3-minute demo](docs/clipping-demo.mp4)**. The video was recorded, narrated and edited by the tool's own
