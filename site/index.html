@@ -535,9 +535,15 @@ button:is(.loop-pause, .ui-pause) { display: none !important; }
         <p>The waitlist opens soon. The code is on GitHub today.</p>
       </div>
       <div class="close__row">
-        <!-- the waitlist: no form address yet, so the fields stay off and nothing is sent. With a Formspree
-             address: put it in data-endpoint and remove "disabled" (system.js then sends it and shows data-sent). -->
-        <form class="waitlist" data-endpoint="" data-sent="You're on the waitlist." novalidate>
+        <!-- the waitlist, sent by Web3Forms. As committed it stays off ("opens soon"); on Vercel, build.mjs switches it
+             on when the WEB3FORMS_ACCESS_KEY variable is set: it fills access_key and data-endpoint and opens the
+             fieldset (system.js then sends it and shows data-sent only once Web3Forms answers). botcheck is the
+             service's spam trap: people never see or tick it. -->
+        <form class="waitlist" data-endpoint="" data-sent="You're on the waitlist. You'll get an email when Clipping opens." data-failed="Not sent. Your email is still here; try again in a moment." novalidate>
+          <input type="hidden" name="access_key" value="">
+          <input type="hidden" name="subject" value="New Clipping waitlist sign-up">
+          <input type="hidden" name="from_name" value="Clipping waitlist">
+          <input type="checkbox" name="botcheck" tabindex="-1" autocomplete="off" hidden>
           <fieldset disabled>
             <div class="field"><label for="w-email">Email</label>
               <input id="w-email" name="email" type="email" autocomplete="email" inputmode="email" required aria-describedby="w-email-err">

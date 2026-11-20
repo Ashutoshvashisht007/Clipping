@@ -79,3 +79,6 @@ site/assets/**
 !site/assets/ui/ui.js
 !site/assets/ui/window/fragment.css
 !site/assets/ui/window/fragment.js
+
+# the landing page build output (site/build.mjs; Vercel builds its own)
+site/dist/
